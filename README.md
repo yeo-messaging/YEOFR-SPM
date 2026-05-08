@@ -94,6 +94,41 @@ INFOPLIST_KEY_NSCameraUsageDescription = Used to verify your identity with face 
 
 ---
 
+## Pilot access for non-YEO bundle IDs
+
+Starting with **0.5.2**, YEOFR is gated to YEO-owned apps by default —
+any bundle ID *not* starting with `com.youreyeonly.` aborts on the first
+`YEOFRSDK.shared` access with a printed contact hint.
+
+For evaluation customers, we issue a **temporary unlock code** that
+bypasses the bundle-prefix check during a fixed pilot window.
+Email **christo@yeomessaging.com** to request one.
+
+Apply the code via a static call **before** any `YEOFRSDK.shared` access —
+typically in your `@main App.init()`:
+
+```swift
+import YEOFR
+
+@main
+struct YourApp: App {
+    init() {
+        YEOFRSDK.activate(unlockCode: "<contact-us-for-pilot-code>")
+    }
+    var body: some Scene { WindowGroup { ContentView() } }
+}
+```
+
+The code has a **hard expiry baked into the SDK build**. Once expired,
+no code unlocks the gate regardless of value — request a fresh build
+from us. This is a stop-gap measure for the 0.5.x cycle; the
+forward-looking licensing scheme is tracked under CSI-384.
+
+If your bundle ID already starts with `com.youreyeonly.`, this call is
+unnecessary (the prefix path already passes) but harmless.
+
+---
+
 ## Why TrueDepth matters
 
 `FaceTrustSession` produces a trust verdict by fusing four signals:
@@ -499,50 +534,4 @@ For full reference, see the DocC archive in the YEOFRSDK source repo.
 > not currently populate them — they read 0 forever. For per-frame face
 > counts, read `frame.detection.faceRects.count` (seen) and the count of
 > non-nil values in `frame.detection.faceIDs` (recognised) instead.
-
----
-
-## Common pitfalls
-
-Things we hit while building integrations against this SDK. If your app
-behaves badly, check this list before re-tuning configs.
-
-**Real user scoring as spoof (CNN raw ≈ 0.4–0.5).**
-Almost always one of: (a) TrueDepth not wired, so the rescue-evidence path
-can't fire (most common — see [Why TrueDepth
-matters](#why-truedepth-matters)); (b) camera config not applied, so the
-face is under-exposed (see `configureForFaceCapture` in the
-[hello world](#5-minute-hello-world)); (c) glasses
-+ adverse lighting, which the CNN is known to false-positive — only
-fixed by (a) and (b) together. **Do not lower
-`YEOLivenessConfig.recommended.spoofEnterThreshold` to compensate.** The
-fusion engine is designed for the recommended thresholds; lowering them
-weakens spoof rejection on actual attacks.
-
-**Trust verdict never flips to `true`.**
-Check that the in-flight gate (`processing` flag) is wired. Without it,
-20+ Tasks/sec pile up on the `FaceTrustSession` actor; the CNN throughput
-collapses below frame rate, no liveness verdicts are produced, and the
-fusion never has the inputs it needs. The hello-world snippet above shows
-the correct shape.
-
-**`depthValue` stuck at `.notDetermined("initial", ...)`.**
-You haven't adopted `YEOFRTrueDepthHandling` or the synchronizer's
-delegate isn't set. Check that `outputSynchronizer` is held strongly (not
-a local variable that goes out of scope) — `setDelegate(_:queue:)` keeps
-a weak reference.
-
-**`faceIDs` populated but `numFacesSeen` / `numFacesRecognised` are 0.**
-Documented caveat above — those counters aren't populated by
-`processFrame`. Source counts from `frame.detection`.
-
-**Add-Package dialog hangs or fails on an SSH URL.**
-Use the HTTPS URL. Xcode's libgit2 doesn't read your SSH agent.
-
-**"unexpectedly did not find the new dependency" when adding the package.**
-Your target's iOS deployment target is below 17.0. Set it to `17.0`
-exactly, or higher, and re-resolve.
-
-**Linker error referencing `iOS-simulator` and `libfsdk-static.a`.**
-The xcframework has no simulator slice. Build and run on a real device.
 
