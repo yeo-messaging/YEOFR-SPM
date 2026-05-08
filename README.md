@@ -97,11 +97,11 @@ INFOPLIST_KEY_NSCameraUsageDescription = Used to verify your identity with face 
 ## Pilot access for non-YEO bundle IDs
 
 Starting with **0.5.2**, YEOFR is gated to YEO-owned apps by default —
-any bundle ID *not* starting with `com.youreyeonly.` aborts on the first
-`YEOFRSDK.shared` access with a printed contact hint.
+non-YEO bundle IDs abort on the first `YEOFRSDK.shared` access with
+a printed contact hint.
 
 For evaluation customers, we issue a **temporary unlock code** that
-bypasses the bundle-prefix check during a fixed pilot window.
+bypasses the bundle gate during a fixed pilot window.
 Email **christo@yeomessaging.com** to request one.
 
 Apply the code via a static call **before** any `YEOFRSDK.shared` access —
@@ -124,8 +124,8 @@ no code unlocks the gate regardless of value — request a fresh build
 from us. This is a stop-gap measure for the 0.5.x cycle; the
 forward-looking licensing scheme is tracked under CSI-384.
 
-If your bundle ID already starts with `com.youreyeonly.`, this call is
-unnecessary (the prefix path already passes) but harmless.
+If your app is YEO-owned, this call is unnecessary (the gate passes
+natively) but harmless.
 
 ---
 
