@@ -1,27 +1,548 @@
-# YEOFR SPM package
+# YEOFR
 
-## New Version
-In binary target:
-1. bump tag version number in url
-2. add new checksum
+iOS Swift Package for face recognition + liveness, distributed as a binary
+xcframework.
 
-## Tag
-example
-git add .
-git commit -am "YEOFR 0.2.1 – update URL + checksum"
-git tag 0.2.1
-git push -u origin main --tags
+As of **0.5.0**, liveness has been merged into YEOFR. A consumer adopts a
+single SPM product — `YEOFR` — and gets all of:
 
-## Create Github Release
-Open YEOMessaging/YEOFR-SPM → Releases → Draft new → Tag 0.2.1
-Upload YEOFR.xcframework.zip
-Title: 0.1.14
-Notes: bullets of changes
-Publish
+- **Face recognition** — 1:1 verify and 1:N identify.
+- **Liveness CNN** — passive anti-spoof on the face crop.
+- **Multi-signal anti-spoof** — texture / temporal / flicker on the full frame.
+- **TrueDepth fusion** (recommended on capable devices) — 3D-vs-flat verdicts
+  that act as rescue evidence when the CNN false-positives a real user.
+- **Per-frame fusion pipeline** — `FaceTrustSession` runs all of the above and
+  emits a single fused trust verdict.
 
-NOTE: URL/tag must match exactly or SPM will 404.
+The previous `YEOLivenessSPM` package is **deprecated**. Do not add it
+alongside YEOFR — the same symbols now live in this package.
 
-## Verify in Sample App YEOFRSampleApp
-Xcode → File → Packages → Update to Latest Package Versions (or pin to 0.2.1)
-Run on a **real device**
-Archive the app → Validate (to ensure no .a slipped into the bundle)
+---
+
+## Requirements
+
+| | |
+|---|---|
+| iOS | 17.0+ |
+| Swift | 5.9+ |
+| Devices | **Real iPhone only** — the xcframework has no simulator slice |
+| Camera | Front camera required; **TrueDepth strongly recommended** — see [Why TrueDepth matters](#why-truedepth-matters) |
+
+The simulator restriction surfaces as a linker error if you try to run on the
+simulator anyway:
+
+```
+ld: building for 'iOS-simulator', but linking in object file
+(.../libfsdk-static.a[arm64]...) built for 'iOS'
+```
+
+---
+
+## Install
+
+### Xcode UI
+
+`File ▸ Add Package Dependencies…` and paste:
+
+```
+https://github.com/YEOMessaging/YEOFR-SPM
+```
+
+Pin to the latest tag (see
+[Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases) — `0.5.1` at
+time of writing).
+
+> Use the **HTTPS** URL, not SSH. Xcode's Add-Package dialog uses libgit2,
+> which does not pick up the system SSH agent and will fail to resolve SSH
+> URLs.
+
+### `Package.swift`
+
+```swift
+dependencies: [
+  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.5.1")
+],
+targets: [
+  .target(
+    name: "YourApp",
+    dependencies: [.product(name: "YEOFR", package: "YEOFR-SPM")]
+  )
+]
+```
+
+Your target's iOS deployment target must be `17.0` or higher — the xcframework
+ships with `MinimumOSVersion = 17.0` and a lower platform floor will trigger a
+graph-register failure when Xcode resolves the package.
+
+---
+
+## Info.plist keys
+
+```xml
+<key>NSCameraUsageDescription</key>
+<string>Used to verify your identity with face recognition.</string>
+```
+
+`NSFaceIDUsageDescription` is **not** required by YEOFR — only add it if your
+app uses Apple's Face ID separately.
+
+If you drive Info.plist via build settings (`GENERATE_INFOPLIST_FILE = YES`):
+
+```
+INFOPLIST_KEY_NSCameraUsageDescription = Used to verify your identity with face recognition.
+```
+
+---
+
+## Why TrueDepth matters
+
+`FaceTrustSession` produces a trust verdict by fusing four signals:
+
+1. The liveness CNN (`SpoofVerdict`).
+2. Multi-signal anti-spoof (texture / temporal / flicker on the full frame).
+3. TrueDepth depth verdict (`YEOFRDepthVerdict.threeD` / `.flat`).
+4. The face-recognition match.
+
+Signals (1) and (4) are easy to wire — a video buffer is enough.
+
+In practice the CNN **will** false-positive real users in adverse conditions
+(notably people wearing glasses, or under poor exposure). The fusion engine
+has a *rescue evidence* path (`LivenessService.swift`) that overrides a
+suspicious CNN score when **depth = 3D** and the multi-signal anti-spoof
+combined score is healthy. Without TrueDepth wiring, that path can never
+fire — `depthValue` stays at `.notDetermined`, and the CNN false-positive
+becomes the verdict.
+
+Conclusion: if your target device has a TrueDepth front camera (iPhone X
+and later), wire the depth pipeline. The
+[hello world](#5-minute-hello-world) below adopts `YEOFRTrueDepthHandling`
+and is what `CFRDemo` and `iosclient` both ship in production. Treat the
+RGB-only path as a *fallback for non-TrueDepth devices*, not a default.
+
+---
+
+## 5-minute hello world
+
+A self-contained SwiftUI sample. Three files: a permission gate, an
+`AVCaptureVideoPreviewLayer` wrapper, and a view model that does the FR +
+liveness + TrueDepth wiring. Drop these into a fresh SwiftUI project,
+set `NSCameraUsageDescription`, push to a real iPhone, and you're
+integrated. This is the same shape `CFRDemo` ships in.
+
+The view model picks `.builtInTrueDepthCamera` when available and falls
+back to `.builtInWideAngleCamera` on devices without TrueDepth. Camera
+tuning (HDR + continuous AE/AWB/AF + 20 fps cap) and the in-flight gate
+are both wired in.
+
+```swift
+// FaceTrustViewModel.swift
+import AVFoundation
+import Foundation
+import Observation
+import SwiftUI
+import YEOFR
+
+@Observable
+final class FaceTrustViewModel:
+    NSObject,
+    YEOFRTrueDepthHandling,
+    AVCaptureDataOutputSynchronizerDelegate
+{
+    let session = AVCaptureSession()
+
+    private let faceTrust = FaceTrustSession()
+    nonisolated private let captureQueue = DispatchQueue(label: "yeofr.capture")
+
+    // YEOFRTrueDepthHandling requirements. videoOutput / depthDataOutput
+    // are `var` per the protocol; the SDK's default
+    // `handleDataOutputSynchronizer(_:didOutput:)` reads them via getter.
+    var videoOutput = AVCaptureVideoDataOutput()
+    var depthDataOutput = AVCaptureDepthDataOutput()
+    var trueDepthState = YEOFRTrueDepthState()
+    var trueDepthConsoleLog = false
+    var faceLivenessDetector = YEOFaceLivenessDetector.shared
+    private(set) var depthEnabled = false
+
+    /// Held strongly so the AVFoundation delegate weak-ref sticks.
+    private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
+
+    var latestDetection: SDKFaceRecognitionResult?
+    var latestEvaluation: FaceEvaluationResult?
+
+    private var trustStreamTask: Task<Void, Never>?
+
+    /// In-flight gate. Without it, 20+ fps spawns 20+ Tasks/sec each
+    /// pinning a frame buffer; long sits OOM the process and CNN
+    /// throughput collapses below frame rate (which suppresses the very
+    /// liveness verdicts trust depends on). MainActor-only.
+    /// Mirrors iosclient's FRSDKWrapper YWLI-1142 pattern.
+    private var processing = false
+
+    func start() async {
+        guard await AVCaptureDevice.requestAccess(for: .video) else { return }
+
+        depthEnabled = canUseTrueDepthCamera()  // protocol helper
+        let deviceType: AVCaptureDevice.DeviceType =
+            depthEnabled ? .builtInTrueDepthCamera : .builtInWideAngleCamera
+
+        guard
+            let camera = AVCaptureDevice.default(deviceType, for: .video, position: .front),
+            let input = try? AVCaptureDeviceInput(device: camera)
+        else { return }
+
+        session.beginConfiguration()
+        if session.canSetSessionPreset(.photo) { session.sessionPreset = .photo }
+        configureForFaceCapture(camera)
+        if session.canAddInput(input) { session.addInput(input) }
+
+        videoOutput.videoSettings = [kCVPixelBufferPixelFormatTypeKey as String: kCMPixelFormat_32BGRA]
+        videoOutput.alwaysDiscardsLateVideoFrames = true
+        videoOutput.setSampleBufferDelegate(self, queue: captureQueue)
+        if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
+        videoOutput.connection(with: .video)?.videoOrientation = .portrait
+
+        if depthEnabled, session.canAddOutput(depthDataOutput) {
+            session.addOutput(depthDataOutput)
+            depthDataOutput.isFilteringEnabled = false
+            if let conn = depthDataOutput.connection(with: .depthData) {
+                conn.videoOrientation = .portrait
+                conn.isEnabled = true
+            }
+            // Synchronise RGB + depth so the SDK's protocol extension
+            // can analyse both for each frame.
+            let sync = AVCaptureDataOutputSynchronizer(
+                dataOutputs: [videoOutput, depthDataOutput]
+            )
+            sync.setDelegate(self, queue: captureQueue)
+            outputSynchronizer = sync
+        } else {
+            depthEnabled = false  // depth refused — RGB-only fallback
+        }
+
+        session.commitConfiguration()
+
+        // startRunning blocks; hop off main so SwiftUI stays responsive.
+        let captureSession = session
+        await Task.detached { captureSession.startRunning() }.value
+
+        subscribeToTrustStream()
+    }
+
+    func stop() {
+        trustStreamTask?.cancel()
+        let captureSession = session
+        Task.detached { captureSession.stopRunning() }
+    }
+
+    /// Synchronizer delegate — routes the synced video frame through the
+    /// protocol's default impl, which calls captureOutput(...) below and
+    /// analyses the depth map (eventually firing onDepthVerdict).
+    nonisolated func dataOutputSynchronizer(
+        _ synchronizer: AVCaptureDataOutputSynchronizer,
+        didOutput synchronizedDataCollection: AVCaptureSynchronizedDataCollection
+    ) {
+        handleDataOutputSynchronizer(synchronizer, didOutput: synchronizedDataCollection)
+    }
+
+    /// Forward depth verdicts into the trust session so the rescue
+    /// evidence path can fire.
+    nonisolated func onDepthVerdict(value: YEOFRDepthVerdict) {
+        Task { [faceTrust] in await faceTrust.recordDepth(value) }
+    }
+
+    nonisolated func captureOutput(_ output: AVCaptureOutput,
+                                   didOutput sampleBuffer: CMSampleBuffer,
+                                   from connection: AVCaptureConnection) {
+        guard let buffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
+        Task { @MainActor [weak self, faceTrust] in
+            guard let self, !self.processing else { return }
+            self.processing = true
+            defer { self.processing = false }
+            let frame = await faceTrust.processFrame(buffer: buffer)
+            // `frame.detection` is the synchronous FR pass for this frame:
+            //   .faceState / .detectedCount / .faceIDs / .faceRects / .framing
+            // `frame.evaluation` is the latest fused trust state:
+            //   .trusted / .livenessValue / .depthValue / .fusedConfidence
+            self.latestDetection = frame.detection
+            self.latestEvaluation = frame.evaluation
+        }
+    }
+
+    private func subscribeToTrustStream() {
+        trustStreamTask?.cancel()
+        let stream = faceTrust
+        trustStreamTask = Task { @MainActor [weak self] in
+            for await result in await stream.faceTrustStream() {
+                self?.latestEvaluation = result
+            }
+        }
+    }
+
+    /// Camera tuning. The CNN is tuned against this exact config; running
+    /// with default-mode camera settings under-exposes faces enough that
+    /// real users score below the spoof threshold (especially with
+    /// glasses).
+    private func configureForFaceCapture(_ device: AVCaptureDevice) {
+        do {
+            try device.lockForConfiguration()
+            defer { device.unlockForConfiguration() }
+
+            // 20 fps cap. Matches iosclient and prevents the in-flight
+            // gate from drowning at higher rates.
+            let frameDuration = CMTime(value: 1, timescale: 20)
+            device.activeVideoMinFrameDuration = frameDuration
+            device.activeVideoMaxFrameDuration = frameDuration
+
+            // HDR keeps detail in highlights/shadows so the CNN sees a
+            // properly-exposed face.
+            if device.activeFormat.isVideoHDRSupported {
+                device.automaticallyAdjustsVideoHDREnabled = false
+                device.isVideoHDREnabled = true
+            }
+            // Continuous AE/AWB/AF — the CNN was trained against streams
+            // that re-meter as the user moves.
+            if device.isExposureModeSupported(.continuousAutoExposure) {
+                device.exposureMode = .continuousAutoExposure
+            }
+            if device.isWhiteBalanceModeSupported(.continuousAutoWhiteBalance) {
+                device.whiteBalanceMode = .continuousAutoWhiteBalance
+            }
+            if device.isFocusModeSupported(.continuousAutoFocus) {
+                device.focusMode = .continuousAutoFocus
+            }
+        } catch {
+            // Lock failed — proceed with default device settings. CNN
+            // behaviour will be degraded; surface this in your telemetry.
+        }
+    }
+}
+```
+
+```swift
+// CameraPreview.swift
+import AVFoundation
+import SwiftUI
+import UIKit
+
+struct CameraPreview: UIViewRepresentable {
+    let session: AVCaptureSession
+
+    func makeUIView(context: Context) -> PreviewView {
+        let view = PreviewView()
+        view.previewLayer.session = session
+        view.previewLayer.videoGravity = .resizeAspectFill
+        return view
+    }
+
+    func updateUIView(_ uiView: PreviewView, context: Context) {
+        if uiView.previewLayer.session !== session {
+            uiView.previewLayer.session = session
+        }
+    }
+
+    final class PreviewView: UIView {
+        override class var layerClass: AnyClass { AVCaptureVideoPreviewLayer.self }
+        var previewLayer: AVCaptureVideoPreviewLayer { layer as! AVCaptureVideoPreviewLayer }
+    }
+}
+```
+
+```swift
+// ContentView.swift — permission gate + minimal trust UI
+import AVFoundation
+import SwiftUI
+
+struct ContentView: View {
+    @State private var status = AVCaptureDevice.authorizationStatus(for: .video)
+
+    var body: some View {
+        switch status {
+        case .authorized:
+            LiveTrustView()
+        case .notDetermined:
+            Button("Grant camera access") {
+                Task {
+                    _ = await AVCaptureDevice.requestAccess(for: .video)
+                    status = AVCaptureDevice.authorizationStatus(for: .video)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+        default:
+            Text("Camera access denied — enable Camera in Settings.")
+                .multilineTextAlignment(.center)
+                .padding()
+        }
+    }
+}
+
+private struct LiveTrustView: View {
+    @State private var viewModel = FaceTrustViewModel()
+
+    var body: some View {
+        ZStack {
+            CameraPreview(session: viewModel.session).ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Spacer()
+                Text(viewModel.latestEvaluation?.trusted == true ? "TRUSTED" : "—")
+                    .font(.system(size: 36, weight: .bold))
+                    .foregroundStyle(viewModel.latestEvaluation?.trusted == true ? .green : .red)
+                Text(String(format: "fused %.2f", viewModel.latestEvaluation?.fusedConfidence ?? 0))
+                Text("liveness: \(String(describing: viewModel.latestEvaluation?.livenessValue))")
+                Text("depth: \(String(describing: viewModel.latestEvaluation?.depthValue))")
+            }
+            .font(.system(.footnote, design: .monospaced))
+            .foregroundStyle(.white)
+            .padding()
+            .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
+            .padding()
+        }
+        .task { await viewModel.start() }
+        .onDisappear { viewModel.stop() }
+    }
+}
+```
+
+Once the camera is up, point it at your face — `latestEvaluation.trusted`
+flips true once FR finds an enrolled face, the liveness CNN scores it
+genuine, and (on TrueDepth devices) the depth verdict is `.threeD`. See
+[Enrolment and tracker persistence](#enrolment-and-tracker-persistence)
+below for how to register a face so the FR side has something to match
+against. For a worked enrolment-first sample with a guided UI, see
+`CFRDemo` and iosclient's `YeoCameraViewController`.
+
+> **Why all the wiring?** The view model is doing more than `processFrame`
+> for a reason. `YEOFRTrueDepthHandling` adoption + the synchronizer
+> unlock the rescue-evidence path so real users with glasses still verify
+> as `trusted` (see [Why TrueDepth matters](#why-truedepth-matters)).
+> `configureForFaceCapture` matches the camera config the CNN is tuned
+> against — without it, real users get scored as spoof under default
+> exposure. The `processing` in-flight gate prevents 20+ fps from piling
+> tasks on the actor and starving the CNN. None of these are optional in
+> practice.
+
+---
+
+## Enrolment and tracker persistence
+
+YEOFR holds the enrolled face database in an internal *tracker*. Enrol once,
+serialise the tracker to `Data`, store it, and reload it on next launch.
+
+```swift
+// Enrol the currently-detected face under a stable face ID + name.
+YEOFRSDK.shared.enroll(faceID: 1, name: "Alice", learnFromCurrentFrame: true)
+
+// Serialise to opaque bytes for at-rest storage.
+let blob = YEOFRSDK.shared.faceRecognitionTrackerData()
+
+// Reload on next launch — replaces the in-memory tracker entirely.
+let rc = YEOFRSDK.shared.loadTracker(from: blob)
+```
+
+The tracker blob is **not encrypted** by the SDK. If you persist it to disk
+you are responsible for encryption at rest. For a worked AES-AE pattern, see
+`iosclient`'s `YeoFaceRecognizerAPI.saveTracker(...)`.
+
+### Compatibility code — persist this with every enrolment
+
+```swift
+let compat = YEOFRSDK.compatabilityCode  // e.g. "A"
+```
+
+Store `compat` next to the tracker blob. After a YEOFR upgrade, compare the
+stored value to `YEOFRSDK.compatabilityCode` before calling `loadTracker`. If
+the code has changed, the underlying recognition vendor or template format has
+changed too — you must force the user to re-enrol. Loading a tracker with a
+mismatched compatibility code will produce undefined matching behaviour.
+
+A complete load-with-recheck pattern:
+
+```swift
+func loadTrackerIfPresent() {
+    guard
+        let savedCompat = try? String(contentsOf: compatURL, encoding: .utf8),
+        let blob = try? Data(contentsOf: trackerURL)
+    else { return }
+
+    guard savedCompat == YEOFRSDK.compatabilityCode else {
+        // Vendor / format changed since enrolment — wipe and force re-enrol.
+        try? FileManager.default.removeItem(at: trackerURL)
+        try? FileManager.default.removeItem(at: compatURL)
+        return
+    }
+
+    _ = YEOFRSDK.shared.loadTracker(from: blob)
+}
+```
+
+---
+
+## Public API at a glance
+
+| Symbol | Role |
+|---|---|
+| `YEOFRSDK.shared` | FR engine: `enroll(...)`, `detectFaces(...)`, tracker (de)serialisation, `compatabilityCode` |
+| `YEOLivenessSDK.shared` | Raw passive-liveness CNN. Most consumers use `FaceTrustSession` instead and never touch this directly. |
+| `FaceTrustSession` | Per-camera-lifecycle fusion actor. `processFrame(buffer:)` per frame; `faceTrustStream()` for verdicts; `recordDepth(_:)` to feed depth verdicts. |
+| `YEOFRTrueDepthHandling` | Protocol — adopt on your camera owner to opt in to TrueDepth depth fusion. Provides `handleDataOutputSynchronizer(...)` default impl + `canUseTrueDepthCamera()` helper. |
+| `YEOFaceLivenessDetector.shared` | Vision-based depth analyser used by the TrueDepth pipeline. Hand to `faceLivenessDetector` on the protocol. |
+| `SDKFaceRecognitionResult` | Per-frame FR output: `faceIDs`, `faceRects`, `framing`, `confidence`, `detectedCount`. |
+| `FaceEvaluationResult` | Fused trust verdict: `trusted`, `livenessValue`, `depthValue`, `fusedConfidence`, `fusionTrace`. |
+| `SpoofVerdict` | `.genuine(confidence:)`, `.spoof(confidence:)`, `.invalid(reason:)`. |
+| `YEOFRDepthVerdict` | `.threeD(detail)`, `.flat(detail)`, `.notDetermined(reason, detail)`. |
+| `LivenessFusionConfig` / `YEOLivenessConfig` | Tunable fusion + liveness configs. `YEOLivenessConfig.recommended` is the production preset. |
+
+For full reference, see the DocC archive in the YEOFRSDK source repo.
+
+> **Caveat — face counts.** `FaceEvaluationResult` ships with `numFacesSeen`
+> and `numFacesRecognised` fields, but `FaceTrustSession.processFrame` does
+> not currently populate them — they read 0 forever. For per-frame face
+> counts, read `frame.detection.faceRects.count` (seen) and the count of
+> non-nil values in `frame.detection.faceIDs` (recognised) instead.
+
+---
+
+## Common pitfalls
+
+Things we hit while building integrations against this SDK. If your app
+behaves badly, check this list before re-tuning configs.
+
+**Real user scoring as spoof (CNN raw ≈ 0.4–0.5).**
+Almost always one of: (a) TrueDepth not wired, so the rescue-evidence path
+can't fire (most common — see [Why TrueDepth
+matters](#why-truedepth-matters)); (b) camera config not applied, so the
+face is under-exposed (see `configureForFaceCapture` in the
+[hello world](#5-minute-hello-world)); (c) glasses
++ adverse lighting, which the CNN is known to false-positive — only
+fixed by (a) and (b) together. **Do not lower
+`YEOLivenessConfig.recommended.spoofEnterThreshold` to compensate.** The
+fusion engine is designed for the recommended thresholds; lowering them
+weakens spoof rejection on actual attacks.
+
+**Trust verdict never flips to `true`.**
+Check that the in-flight gate (`processing` flag) is wired. Without it,
+20+ Tasks/sec pile up on the `FaceTrustSession` actor; the CNN throughput
+collapses below frame rate, no liveness verdicts are produced, and the
+fusion never has the inputs it needs. The hello-world snippet above shows
+the correct shape.
+
+**`depthValue` stuck at `.notDetermined("initial", ...)`.**
+You haven't adopted `YEOFRTrueDepthHandling` or the synchronizer's
+delegate isn't set. Check that `outputSynchronizer` is held strongly (not
+a local variable that goes out of scope) — `setDelegate(_:queue:)` keeps
+a weak reference.
+
+**`faceIDs` populated but `numFacesSeen` / `numFacesRecognised` are 0.**
+Documented caveat above — those counters aren't populated by
+`processFrame`. Source counts from `frame.detection`.
+
+**Add-Package dialog hangs or fails on an SSH URL.**
+Use the HTTPS URL. Xcode's libgit2 doesn't read your SSH agent.
+
+**"unexpectedly did not find the new dependency" when adding the package.**
+Your target's iOS deployment target is below 17.0. Set it to `17.0`
+exactly, or higher, and re-resolve.
+
+**Linker error referencing `iOS-simulator` and `libfsdk-static.a`.**
+The xcframework has no simulator slice. Build and run on a real device.
+
