@@ -49,7 +49,7 @@ https://github.com/YEOMessaging/YEOFR-SPM
 ```
 
 Pin to the latest tag (see
-[Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases) — `0.5.1` at
+[Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases) — `0.5.3` at
 time of writing).
 
 > Use the **HTTPS** URL, not SSH. Xcode's Add-Package dialog uses libgit2,
@@ -60,7 +60,7 @@ time of writing).
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.5.1")
+  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.5.3")
 ],
 targets: [
   .target(
@@ -460,23 +460,74 @@ against. For a worked enrolment-first sample with a guided UI, see
 
 ## Enrolment and tracker persistence
 
-YEOFR holds the enrolled face database in an internal *tracker*. Enrol once,
-serialise the tracker to `Data`, store it, and reload it on next launch.
+YEOFR holds the enrolled face database in an internal *tracker*. Enrol
+once, serialise the tracker, store it, and reload it on next launch.
 
 ```swift
 // Enrol the currently-detected face under a stable face ID + name.
 YEOFRSDK.shared.enroll(faceID: 1, name: "Alice", learnFromCurrentFrame: true)
 
-// Serialise to opaque bytes for at-rest storage.
-let blob = YEOFRSDK.shared.faceRecognitionTrackerData()
+// Plaintext path — useful for tests/demos.
+let raw = YEOFRSDK.shared.faceRecognitionTrackerData()
+
+// Encrypted path — recommended for at-rest storage. Routes through
+// `config.cryptor`; returns a versioned blob ready to serialise.
+let blob = try YEOFRSDK.shared.encryptedFaceRecognitionTrackerData()
+try blob?.serialized().write(to: trackerURL, options: .atomic)
 
 // Reload on next launch — replaces the in-memory tracker entirely.
-let rc = YEOFRSDK.shared.loadTracker(from: blob)
+let parsed = try EncryptedBlob.parse(Data(contentsOf: trackerURL))
+let rc = try YEOFRSDK.shared.loadTracker(from: parsed)
 ```
 
-The tracker blob is **not encrypted** by the SDK. If you persist it to disk
-you are responsible for encryption at rest. For a worked AES-AE pattern, see
-`iosclient`'s `YeoFaceRecognizerAPI.saveTracker(...)`.
+### Choosing a cryptor
+
+`YEOFRConfig.cryptor` is the SDK's pluggable encryption strategy
+(protocol `Cryptor`). Three built-ins ship in `YEOFR/Crypto/`:
+
+| Implementation | Algorithm ID | When to pick |
+|---|---|---|
+| `PassthroughCryptor` | `0x00` | Tests, demos, on-device-only material. Biometric data goes out as plaintext — this is a security choice. |
+| `AESGCMCryptor` | `0x01` | Greenfield consumers. CryptoKit AES-256-GCM. Hardware AES on Apple Silicon; nonce is generated per encrypt. |
+| `AESCBCHMACCryptor` | `0x02` | Consumers that already speak AES-256-CBC + HMAC-SHA256 (Encrypt-then-MAC). Bit-compatible with iosclient's existing `Data.encryptAES_AE`. |
+
+The default `YEOFRConfig.defaultConfig` uses `PassthroughCryptor` so
+existing tests and demos compile unchanged. For production, prefer the
+`production(keychainTag:)` factory which mints (or fetches) a
+Keychain-resident AES-256 key transparently:
+
+```swift
+let config = try YEOFRConfig.production(keychainTag: "com.example.app.frsdk.gcm")
+YEOFRSDK.initialize(apiKey: "...", dataPath: "...", config: config)
+```
+
+Or build a cryptor explicitly and pass it via your own `YEOFRConfig`:
+
+```swift
+let cryptor = try AESGCMCryptor.withKeychainKey(tag: "com.example.app.frsdk.gcm")
+var config = YEOFRConfig.defaultConfig
+config.cryptor = cryptor
+```
+
+For the CBC + HMAC variant you supply two raw 32-byte keys (typically
+both stored via `KeychainKeyStore`):
+
+```swift
+let store = KeychainKeyStore()
+let aes  = try store.loadOrGenerate(tag: "com.example.app.frsdk.cbc.aes",  sizeBytes: 32)
+let hmac = try store.loadOrGenerate(tag: "com.example.app.frsdk.cbc.hmac", sizeBytes: 32)
+let cryptor = try AESCBCHMACCryptor(aesKey: aes, hmacKey: hmac)
+```
+
+### Wire format
+
+`EncryptedBlob.serialized()` produces `[version(1)] [algorithmID(1)]
+[payload…]`. The two-byte header is stable across cryptors so a reader
+can route a blob to the right decrypt path *before* touching the
+payload — useful when consumers migrate from one cryptor to another
+and need the old data to keep loading. `EncryptedBlob.AlgorithmID`
+exposes the reserved IDs (`0x00`/`0x01`/`0x02`) plus a
+`customRangeStart = 0x80` boundary for consumer-defined cryptors.
 
 ### Compatibility code — persist this with every enrolment
 
@@ -484,19 +535,20 @@ you are responsible for encryption at rest. For a worked AES-AE pattern, see
 let compat = YEOFRSDK.compatabilityCode  // e.g. "A"
 ```
 
-Store `compat` next to the tracker blob. After a YEOFR upgrade, compare the
-stored value to `YEOFRSDK.compatabilityCode` before calling `loadTracker`. If
-the code has changed, the underlying recognition vendor or template format has
-changed too — you must force the user to re-enrol. Loading a tracker with a
-mismatched compatibility code will produce undefined matching behaviour.
+Store `compat` next to the tracker blob. After a YEOFR upgrade, compare
+the stored value to `YEOFRSDK.compatabilityCode` before calling
+`loadTracker`. If the code has changed, the underlying recognition
+vendor or template format has changed too — you must force the user to
+re-enrol. Loading a tracker with a mismatched compatibility code will
+produce undefined matching behaviour.
 
-A complete load-with-recheck pattern:
+A complete load-with-recheck pattern using the encrypted path:
 
 ```swift
 func loadTrackerIfPresent() {
     guard
         let savedCompat = try? String(contentsOf: compatURL, encoding: .utf8),
-        let blob = try? Data(contentsOf: trackerURL)
+        let raw = try? Data(contentsOf: trackerURL)
     else { return }
 
     guard savedCompat == YEOFRSDK.compatabilityCode else {
@@ -506,7 +558,15 @@ func loadTrackerIfPresent() {
         return
     }
 
-    _ = YEOFRSDK.shared.loadTracker(from: blob)
+    do {
+        let blob = try EncryptedBlob.parse(raw)
+        _ = try YEOFRSDK.shared.loadTracker(from: blob)
+    } catch {
+        // Bad key, tampered ciphertext, or unknown version — treat as
+        // unrecoverable and force re-enrol.
+        try? FileManager.default.removeItem(at: trackerURL)
+        try? FileManager.default.removeItem(at: compatURL)
+    }
 }
 ```
 
@@ -526,6 +586,10 @@ func loadTrackerIfPresent() {
 | `SpoofVerdict` | `.genuine(confidence:)`, `.spoof(confidence:)`, `.invalid(reason:)`. |
 | `YEOFRDepthVerdict` | `.threeD(detail)`, `.flat(detail)`, `.notDetermined(reason, detail)`. |
 | `LivenessFusionConfig` / `YEOLivenessConfig` | Tunable fusion + liveness configs. `YEOLivenessConfig.recommended` is the production preset. |
+| `Cryptor` / `EncryptedBlob` / `CryptorError` | Authenticated-encryption protocol + versioned envelope used by `encryptedFaceRecognitionTrackerData()` and `loadTracker(from: EncryptedBlob)`. |
+| `PassthroughCryptor`, `AESGCMCryptor`, `AESCBCHMACCryptor` | Built-in cryptors. `AESGCMCryptor.withKeychainKey(tag:)` mints + persists a 32-byte key on first call. |
+| `KeychainKeyStore` | `loadOrGenerate(tag:sizeBytes:)` — hybrid key vault used by the AES cryptors. |
+| `YEOFRConfig.production(keychainTag:)` | Production-ready config: `defaultConfig` tunables + AES-256-GCM cryptor backed by a Keychain-resident key. |
 
 For full reference, see the DocC archive in the YEOFRSDK source repo.
 
