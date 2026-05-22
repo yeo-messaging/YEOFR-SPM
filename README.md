@@ -49,7 +49,7 @@ https://github.com/YEOMessaging/YEOFR-SPM
 ```
 
 Pin to the latest tag (see
-[Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases) — `0.6.1` at
+[Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases) — `0.6.2` at
 time of writing).
 
 > Use the **HTTPS** URL, not SSH. Xcode's Add-Package dialog uses libgit2,
@@ -60,7 +60,7 @@ time of writing).
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.6.1")
+  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.6.2")
 ],
 targets: [
   .target(
@@ -117,11 +117,7 @@ let sdk = YEOFRSDK(
     pilotUnlockCode: "<contact-us-for-pilot-code>"
 )
 
-let faceTrust = FaceTrustSession(
-    useCase: .authentication,
-    pilotUnlockCode: "<contact-us-for-pilot-code>",
-    sdk: sdk
-)
+let faceTrust = FaceTrustSession(sdk: sdk)
 ```
 
 If your app is YEO-owned, pass any non-empty string — the gate
@@ -196,10 +192,10 @@ final class FaceTrustViewModel:
     let session = AVCaptureSession()
 
     /// Construct both at init time. Every public init requires
-    /// `useCase` + `pilotUnlockCode`; `FaceTrustSession` additionally
-    /// takes the `YEOFRSDK` instance so the fusion actor and the FR
-    /// engine share state. There is no `.shared` singleton — instances
-    /// are per camera-lifecycle and are not safe to reuse across
+    /// `useCase` + `pilotUnlockCode`; `FaceTrustSession` reads both
+    /// off the SDK instance so the fusion actor and the FR engine
+    /// share state. There is no `.shared` singleton — instances are
+    /// per camera-lifecycle and are not safe to reuse across
     /// reconfigurations.
     private let sdk: YEOFRSDK
     private let faceTrust: FaceTrustSession
@@ -224,11 +220,7 @@ final class FaceTrustViewModel:
         let useCase: YEOUseCase = .continuous
         let sdk = YEOFRSDK(useCase: useCase, pilotUnlockCode: pilotUnlockCode)
         self.sdk = sdk
-        self.faceTrust = FaceTrustSession(
-            useCase: useCase,
-            pilotUnlockCode: pilotUnlockCode,
-            sdk: sdk
-        )
+        self.faceTrust = FaceTrustSession(sdk: sdk)
         self.faceLivenessDetector = YEOFaceLivenessDetector(useCase: useCase)
         super.init()
     }
@@ -625,7 +617,7 @@ func loadTrackerIfPresent() {
 | Symbol | Role |
 |---|---|
 | `YEOFRSDK(useCase:pilotUnlockCode:)` | FR engine entry point. Constructs a per-instance SDK; no shared singleton. Methods: `enroll(...)`, `detectFaces(...)`, tracker (de)serialisation, `compatabilityCode`. Throws form `init(useCase:pilotUnlockCode:encryption:)` adds encryption selection (0.6.1+). |
-| `FaceTrustSession(useCase:pilotUnlockCode:sdk:)` | Per-camera-lifecycle fusion actor. Takes the `YEOFRSDK` you built so they share FR state. `processFrame(buffer:)` per frame; `faceTrustStream()` for verdicts; `recordDepth(_:)` to feed depth verdicts. |
+| `FaceTrustSession(sdk:)` | Per-camera-lifecycle fusion actor. Takes the `YEOFRSDK` you built; reads `useCase` + pilot code off it so they share FR state. `processFrame(buffer:)` per frame; `faceTrustStream()` for verdicts; `recordDepth(_:)` to feed depth verdicts. *(One-arg form since `0.6.2`; the prior three-arg `init(useCase:pilotUnlockCode:sdk:)` is removed.)* |
 | `YEOFRTrueDepthHandling` | Protocol — adopt on your camera owner to opt in to TrueDepth depth fusion. Provides `handleDataOutputSynchronizer(...)` default impl + `canUseTrueDepthCamera()` helper. |
 | `YEOFaceLivenessDetector(useCase:)` | Vision-based depth analyser used by the TrueDepth pipeline. Hand to `faceLivenessDetector` on the protocol. |
 | `YEOUseCase` | Enum tuning the SDK for `.onboarding` (fast accept), `.authentication` (balanced), or `.continuous` (slow revoke). Required on every public init. |
