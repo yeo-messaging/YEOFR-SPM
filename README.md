@@ -49,7 +49,7 @@ https://github.com/YEOMessaging/YEOFR-SPM
 ```
 
 Pin to the latest tag (see
-[Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases) — `0.5.3` at
+[Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases) — `0.6.1` at
 time of writing).
 
 > Use the **HTTPS** URL, not SSH. Xcode's Add-Package dialog uses libgit2,
@@ -60,7 +60,7 @@ time of writing).
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.5.3")
+  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.6.1")
 ],
 targets: [
   .target(
@@ -482,42 +482,45 @@ let rc = try YEOFRSDK.shared.loadTracker(from: parsed)
 
 ### Choosing a cryptor
 
-`YEOFRConfig.cryptor` is the SDK's pluggable encryption strategy
-(protocol `Cryptor`). Three built-ins ship in `YEOFR/Crypto/`:
+Encryption mode is picked at SDK construction via the
+`YEOEncryption` enum (`0.6.1+`). Three built-in modes plus a
+`.custom` escape hatch:
 
-| Implementation | Algorithm ID | When to pick |
+| Mode | Algorithm ID | When to pick |
 |---|---|---|
-| `PassthroughCryptor` | `0x00` | Tests, demos, on-device-only material. Biometric data goes out as plaintext — this is a security choice. |
-| `AESGCMCryptor` | `0x01` | Greenfield consumers. CryptoKit AES-256-GCM. Hardware AES on Apple Silicon; nonce is generated per encrypt. |
-| `AESCBCHMACCryptor` | `0x02` | Consumers that already speak AES-256-CBC + HMAC-SHA256 (Encrypt-then-MAC). Bit-compatible with iosclient's existing `Data.encryptAES_AE`. |
+| `.plaintext` | `0x00` | Tests, demos, on-device-only material. Biometric data goes out as plaintext — this is a security choice. |
+| `.aesGCM(keychainTag:)` | `0x01` | Greenfield consumers. CryptoKit AES-256-GCM keyed from a Keychain-resident 256-bit key generated on first use. Hardware AES on Apple Silicon; nonce is regenerated per encrypt. |
+| `.aesCBCHMAC(aesKey:hmacKey:)` | `0x02` | Consumers that already speak AES-256-CBC + HMAC-SHA256 (Encrypt-then-MAC). Bit-compatible with iosclient's existing `Data.encryptAES_AE`. |
+| `.custom(any Cryptor)` | consumer-defined (`≥ 0x80`) | HSM-backed cryptor, hybrid key sources, anything not covered by the built-ins. |
 
-The default `YEOFRConfig.defaultConfig` uses `PassthroughCryptor` so
-existing tests and demos compile unchanged. For production, prefer the
-`production(keychainTag:)` factory which mints (or fetches) a
-Keychain-resident AES-256 key transparently:
+Pass the chosen mode to the throwing init:
 
 ```swift
-let config = try YEOFRConfig.production(keychainTag: "com.example.app.frsdk.gcm")
-YEOFRSDK.initialize(apiKey: "...", dataPath: "...", config: config)
-```
-
-Or build a cryptor explicitly and pass it via your own `YEOFRConfig`:
-
-```swift
-let cryptor = try AESGCMCryptor.withKeychainKey(tag: "com.example.app.frsdk.gcm")
-var config = YEOFRConfig.defaultConfig
-config.cryptor = cryptor
+// AES-256-GCM, Keychain-resident key (the recommended production path).
+let sdk = try YEOFRSDK(
+    useCase: .authentication,
+    pilotUnlockCode: "...",
+    encryption: .aesGCM(keychainTag: "com.example.app.frsdk.gcm")
+)
 ```
 
 For the CBC + HMAC variant you supply two raw 32-byte keys (typically
-both stored via `KeychainKeyStore`):
+both minted via `KeychainKeyStore`):
 
 ```swift
 let store = KeychainKeyStore()
 let aes  = try store.loadOrGenerate(tag: "com.example.app.frsdk.cbc.aes",  sizeBytes: 32)
 let hmac = try store.loadOrGenerate(tag: "com.example.app.frsdk.cbc.hmac", sizeBytes: 32)
-let cryptor = try AESCBCHMACCryptor(aesKey: aes, hmacKey: hmac)
+let sdk = try YEOFRSDK(
+    useCase: .authentication,
+    pilotUnlockCode: "...",
+    encryption: .aesCBCHMAC(aesKey: aes, hmacKey: hmac)
+)
 ```
+
+The existing non-throwing `init(useCase:pilotUnlockCode:)` is unchanged
+— it stays as a zero-config plaintext path. Opt into encryption only
+when you're ready to handle the throw.
 
 ### Wire format
 
@@ -589,7 +592,7 @@ func loadTrackerIfPresent() {
 | `Cryptor` / `EncryptedBlob` / `CryptorError` | Authenticated-encryption protocol + versioned envelope used by `encryptedFaceRecognitionTrackerData()` and `loadTracker(from: EncryptedBlob)`. |
 | `PassthroughCryptor`, `AESGCMCryptor`, `AESCBCHMACCryptor` | Built-in cryptors. `AESGCMCryptor.withKeychainKey(tag:)` mints + persists a 32-byte key on first call. |
 | `KeychainKeyStore` | `loadOrGenerate(tag:sizeBytes:)` — hybrid key vault used by the AES cryptors. |
-| `YEOFRConfig.production(keychainTag:)` | Production-ready config: `defaultConfig` tunables + AES-256-GCM cryptor backed by a Keychain-resident key. |
+| `YEOEncryption` | Public selector passed to `YEOFRSDK(useCase:pilotUnlockCode:encryption:)`. Cases: `.plaintext`, `.aesGCM(keychainTag:)`, `.aesCBCHMAC(aesKey:hmacKey:)`, `.custom(any Cryptor)`. |
 
 For full reference, see the DocC archive in the YEOFRSDK source repo.
 
