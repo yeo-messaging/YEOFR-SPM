@@ -631,9 +631,9 @@ func loadTrackerIfPresent() {
 | `YEOUseCase` | Enum tuning the SDK for `.onboarding` (fast accept), `.authentication` (balanced), or `.continuous` (slow revoke). Required on every public init. |
 | `SDKFaceRecognitionResult` | Per-frame FR output: `faceIDs`, `faceRects`, `framing`, `confidence`, `detectedCount`. |
 | `FaceEvaluationResult` | Fused trust verdict: `trusted`, `livenessValue`, `depthValue`, `fusedConfidence`, `fusionTrace`. |
-| `SpoofVerdict` | `.genuine(confidence:)`, `.spoof(confidence:)`, `.invalid(reason:)`. |
+| `SpoofVerdict` | `.genuine(confidence: Float)`, `.spoof(confidence: Float, type: SpoofType)`, `.invalid(reason: InvalidFrameReason)`. |
+| `SpoofType` | Spoof classification carried by `SpoofVerdict.spoof`: `.photo`, `.screen`, `.video`, `.mask`, `.unknown`. |
 | `YEOFRDepthVerdict` | `.threeD(detail)`, `.flat(detail)`, `.notDetermined(reason, detail)`. |
-| `LivenessFusionConfig` / `YEOLivenessConfig` | Tunable fusion + liveness configs. `YEOLivenessConfig.recommended` is the production preset. |
 | `Cryptor` / `EncryptedBlob` / `CryptorError` | Authenticated-encryption protocol + versioned envelope used by `encryptedFaceRecognitionTrackerData()` and `loadTracker(from: EncryptedBlob)`. |
 | `PassthroughCryptor`, `AESGCMCryptor`, `AESCBCHMACCryptor` | Built-in cryptors. `AESGCMCryptor.withKeychainKey(tag:)` mints + persists a 32-byte key on first call. |
 | `KeychainKeyStore` | `loadOrGenerate(tag:sizeBytes:)` — hybrid key vault used by the AES cryptors. |
