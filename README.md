@@ -96,36 +96,41 @@ INFOPLIST_KEY_NSCameraUsageDescription = Used to verify your identity with face 
 
 ## Pilot access for non-YEO bundle IDs
 
-Starting with **0.5.2**, YEOFR is gated to YEO-owned apps by default —
-non-YEO bundle IDs abort on the first `YEOFRSDK.shared` access with
-a printed contact hint.
+YEOFR is gated to YEO-owned bundle IDs by default — non-YEO bundle
+IDs abort the moment a `YEOFRSDK` instance is constructed, with a
+printed contact hint.
 
 For evaluation customers, we issue a **temporary unlock code** that
-bypasses the bundle gate during a fixed pilot window.
-Email **christo@yeomessaging.com** to request one.
+bypasses the bundle gate during a fixed pilot window. Email
+**christo@yeomessaging.com** to request one.
 
-Apply the code via a static call **before** any `YEOFRSDK.shared` access —
-typically in your `@main App.init()`:
+As of **0.6.0** the unlock code is passed directly to the SDK's
+designated initialisers — there is no longer a separate static
+`activate(...)` call, and there is no `YEOFRSDK.shared` singleton.
+Every public initialiser requires the code:
 
 ```swift
 import YEOFR
 
-@main
-struct YourApp: App {
-    init() {
-        YEOFRSDK.activate(unlockCode: "<contact-us-for-pilot-code>")
-    }
-    var body: some Scene { WindowGroup { ContentView() } }
-}
+let sdk = YEOFRSDK(
+    useCase: .authentication,
+    pilotUnlockCode: "<contact-us-for-pilot-code>"
+)
+
+let faceTrust = FaceTrustSession(
+    useCase: .authentication,
+    pilotUnlockCode: "<contact-us-for-pilot-code>",
+    sdk: sdk
+)
 ```
+
+If your app is YEO-owned, pass any non-empty string — the gate
+passes natively on a YEO bundle ID regardless of the value.
 
 The code has a **hard expiry baked into the SDK build**. Once expired,
 no code unlocks the gate regardless of value — request a fresh build
-from us. This is a stop-gap measure for the 0.5.x cycle; the
+from us. This is a stop-gap measure for the 0.x cycle; the
 forward-looking licensing scheme is tracked under CSI-384.
-
-If your app is YEO-owned, this call is unnecessary (the gate passes
-natively) but harmless.
 
 ---
 
@@ -183,9 +188,22 @@ final class FaceTrustViewModel:
     YEOFRTrueDepthHandling,
     AVCaptureDataOutputSynchronizerDelegate
 {
+    /// Replace with the unlock code we issued you. Any non-empty string
+    /// works on YEO-owned bundle IDs; non-YEO bundles need the real
+    /// pilot code (see *Pilot access for non-YEO bundle IDs* above).
+    private let pilotUnlockCode = "<contact-us-for-pilot-code>"
+
     let session = AVCaptureSession()
 
-    private let faceTrust = FaceTrustSession()
+    /// Construct both at init time. Every public init requires
+    /// `useCase` + `pilotUnlockCode`; `FaceTrustSession` additionally
+    /// takes the `YEOFRSDK` instance so the fusion actor and the FR
+    /// engine share state. There is no `.shared` singleton — instances
+    /// are per camera-lifecycle and are not safe to reuse across
+    /// reconfigurations.
+    private let sdk: YEOFRSDK
+    private let faceTrust: FaceTrustSession
+
     nonisolated private let captureQueue = DispatchQueue(label: "yeofr.capture")
 
     // YEOFRTrueDepthHandling requirements. videoOutput / depthDataOutput
@@ -195,8 +213,25 @@ final class FaceTrustViewModel:
     var depthDataOutput = AVCaptureDepthDataOutput()
     var trueDepthState = YEOFRTrueDepthState()
     var trueDepthConsoleLog = false
-    var faceLivenessDetector = YEOFaceLivenessDetector.shared
+    var faceLivenessDetector: YEOFaceLivenessDetector
     private(set) var depthEnabled = false
+
+    override init() {
+        // `.continuous` favours slow-revoke fusion — appropriate for
+        // an ongoing trust check that should not flap on transient
+        // dips. Use `.onboarding` for first-shot enrolment, or
+        // `.authentication` for a discrete login event.
+        let useCase: YEOUseCase = .continuous
+        let sdk = YEOFRSDK(useCase: useCase, pilotUnlockCode: pilotUnlockCode)
+        self.sdk = sdk
+        self.faceTrust = FaceTrustSession(
+            useCase: useCase,
+            pilotUnlockCode: pilotUnlockCode,
+            sdk: sdk
+        )
+        self.faceLivenessDetector = YEOFaceLivenessDetector(useCase: useCase)
+        super.init()
+    }
 
     /// Held strongly so the AVFoundation delegate weak-ref sticks.
     private var outputSynchronizer: AVCaptureDataOutputSynchronizer?
@@ -464,20 +499,30 @@ YEOFR holds the enrolled face database in an internal *tracker*. Enrol
 once, serialise the tracker, store it, and reload it on next launch.
 
 ```swift
+// `sdk` is the YEOFRSDK instance you constructed at init time —
+// e.g. the `sdk` property on FaceTrustViewModel from the hello-world
+// above. There is no `.shared` singleton; every call goes through
+// the instance you own.
+
 // Enrol the currently-detected face under a stable face ID + name.
-YEOFRSDK.shared.enroll(faceID: 1, name: "Alice", learnFromCurrentFrame: true)
+sdk.enroll(faceID: 1, name: "Alice", learnFromCurrentFrame: true)
 
 // Plaintext path — useful for tests/demos.
-let raw = YEOFRSDK.shared.faceRecognitionTrackerData()
+let raw = sdk.faceRecognitionTrackerData()
 
 // Encrypted path — recommended for at-rest storage. Routes through
-// `config.cryptor`; returns a versioned blob ready to serialise.
-let blob = try YEOFRSDK.shared.encryptedFaceRecognitionTrackerData()
+// the cryptor the SDK was built with (`.plaintext` by default; pass
+// a `YEOEncryption` value to the SDK init to pick AES-GCM or
+// AES-CBC+HMAC). Returns a versioned blob ready to serialise.
+let blob = try sdk.encryptedFaceRecognitionTrackerData()
 try blob?.serialized().write(to: trackerURL, options: .atomic)
 
 // Reload on next launch — replaces the in-memory tracker entirely.
+// The SDK that performs the decrypt must hold the matching cryptor;
+// peek at the blob's `algorithmID` before building the SDK if you
+// want to support multiple modes side-by-side.
 let parsed = try EncryptedBlob.parse(Data(contentsOf: trackerURL))
-let rc = try YEOFRSDK.shared.loadTracker(from: parsed)
+let rc = try sdk.loadTracker(from: parsed)
 ```
 
 ### Choosing a cryptor
@@ -563,7 +608,7 @@ func loadTrackerIfPresent() {
 
     do {
         let blob = try EncryptedBlob.parse(raw)
-        _ = try YEOFRSDK.shared.loadTracker(from: blob)
+        _ = try sdk.loadTracker(from: blob)
     } catch {
         // Bad key, tampered ciphertext, or unknown version — treat as
         // unrecoverable and force re-enrol.
@@ -579,11 +624,11 @@ func loadTrackerIfPresent() {
 
 | Symbol | Role |
 |---|---|
-| `YEOFRSDK.shared` | FR engine: `enroll(...)`, `detectFaces(...)`, tracker (de)serialisation, `compatabilityCode` |
-| `YEOLivenessSDK.shared` | Raw passive-liveness CNN. Most consumers use `FaceTrustSession` instead and never touch this directly. |
-| `FaceTrustSession` | Per-camera-lifecycle fusion actor. `processFrame(buffer:)` per frame; `faceTrustStream()` for verdicts; `recordDepth(_:)` to feed depth verdicts. |
+| `YEOFRSDK(useCase:pilotUnlockCode:)` | FR engine entry point. Constructs a per-instance SDK; no shared singleton. Methods: `enroll(...)`, `detectFaces(...)`, tracker (de)serialisation, `compatabilityCode`. Throws form `init(useCase:pilotUnlockCode:encryption:)` adds encryption selection (0.6.1+). |
+| `FaceTrustSession(useCase:pilotUnlockCode:sdk:)` | Per-camera-lifecycle fusion actor. Takes the `YEOFRSDK` you built so they share FR state. `processFrame(buffer:)` per frame; `faceTrustStream()` for verdicts; `recordDepth(_:)` to feed depth verdicts. |
 | `YEOFRTrueDepthHandling` | Protocol — adopt on your camera owner to opt in to TrueDepth depth fusion. Provides `handleDataOutputSynchronizer(...)` default impl + `canUseTrueDepthCamera()` helper. |
-| `YEOFaceLivenessDetector.shared` | Vision-based depth analyser used by the TrueDepth pipeline. Hand to `faceLivenessDetector` on the protocol. |
+| `YEOFaceLivenessDetector(useCase:)` | Vision-based depth analyser used by the TrueDepth pipeline. Hand to `faceLivenessDetector` on the protocol. |
+| `YEOUseCase` | Enum tuning the SDK for `.onboarding` (fast accept), `.authentication` (balanced), or `.continuous` (slow revoke). Required on every public init. |
 | `SDKFaceRecognitionResult` | Per-frame FR output: `faceIDs`, `faceRects`, `framing`, `confidence`, `detectedCount`. |
 | `FaceEvaluationResult` | Fused trust verdict: `trusted`, `livenessValue`, `depthValue`, `fusedConfidence`, `fusionTrace`. |
 | `SpoofVerdict` | `.genuine(confidence:)`, `.spoof(confidence:)`, `.invalid(reason:)`. |
