@@ -48,9 +48,10 @@ ld: building for 'iOS-simulator', but linking in object file
 https://github.com/YEOMessaging/YEOFR-SPM
 ```
 
-Pin to the latest tag (see
-[Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases) — `0.6.2` at
-time of writing).
+Pin to the current stable tag — `0.5.4`. The `0.6.x` line is currently
+published as **pre-release** while we stabilise it; see
+[Pre-release: 0.6.x](#pre-release-06x) below to opt in. Full release list
+lives on [Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases).
 
 > Use the **HTTPS** URL, not SSH. Xcode's Add-Package dialog uses libgit2,
 > which does not pick up the system SSH agent and will fail to resolve SSH
@@ -60,7 +61,14 @@ time of writing).
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.6.2")
+  // `.upToNextMinor` keeps you on the 0.5.x stable line. Plain
+  // `from: "0.5.4"` would still resolve to 0.6.2 — SwiftPM ignores
+  // GitHub's pre-release flag and treats every 0.x bump as in-range
+  // until 1.0.0.
+  .package(
+    url: "https://github.com/YEOMessaging/YEOFR-SPM",
+    .upToNextMinor(from: "0.5.4")
+  )
 ],
 targets: [
   .target(
@@ -73,6 +81,42 @@ targets: [
 Your target's iOS deployment target must be `17.0` or higher — the xcframework
 ships with `MinimumOSVersion = 17.0` and a lower platform floor will trigger a
 graph-register failure when Xcode resolves the package.
+
+---
+
+## Pre-release: 0.6.x
+
+The `0.6.x` line (`0.6.0`, `0.6.1`, `0.6.2`) is published as **pre-release**
+while the new SDK surface stabilises. Default consumers should stay on
+`0.5.4`. Note that SwiftPM does **not** honor GitHub's pre-release flag, so
+you must use `exact:` or a bounded range to opt in or out deliberately —
+plain `from:` will pull `0.6.2`.
+
+What's in the 0.6.x line (covered by the rest of this README):
+
+- **0.6.0** — pilot unlock code is passed on every designated initialiser;
+  no more static `activate(...)`; no `YEOFRSDK.shared` singleton.
+- **0.6.1** — throwing `init(useCase:pilotUnlockCode:encryption:)` and the
+  `YEOEncryption` selector (plaintext / AES-GCM / AES-CBC+HMAC / custom).
+- **0.6.2** — single-arg `FaceTrustSession(sdk:)`; the three-arg form is
+  removed.
+
+To opt in, pin exactly:
+
+```swift
+dependencies: [
+  .package(
+    url: "https://github.com/YEOMessaging/YEOFR-SPM",
+    exact: "0.6.2"
+  )
+]
+```
+
+> The hello-world, the cryptor section, and the API table below all
+> document the 0.6.x surface. If you're on `0.5.4`, treat those snippets
+> as forward-looking — the older API (static `activate`, three-arg
+> `FaceTrustSession`, no encryption selector) is what compiles against
+> 0.5.x.
 
 ---
 
