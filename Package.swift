@@ -10,8 +10,8 @@ let package = Package(
   targets: [
     .binaryTarget(
       name: "YEOFR",
-      url: "https://github.com/YEOMessaging/YEOFR-SPM/releases/download/0.6.4/YEOFR.xcframework.zip",
-      checksum: "59b4076f4b4a06f6343bfe56fc4f962a2fc182522630c476cc3c11e498de9fef"
+      url: "https://github.com/YEOMessaging/YEOFR-SPM/releases/download/0.6.5/YEOFR.xcframework.zip",
+      checksum: "0329374104d484e693c676e85ffba861c5403f6791975c5ebae13919e20f44c6"
     )
   ]
 )
