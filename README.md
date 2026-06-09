@@ -48,7 +48,7 @@ ld: building for 'iOS-simulator', but linking in object file
 https://github.com/YEOMessaging/YEOFR-SPM
 ```
 
-Pin to the current stable tag — `0.5.4`. The `0.6.x` line is currently
+Pin to the current stable tag — `0.5.5`. The `0.6.x` line is currently
 published as **pre-release** while we stabilise it; see
 [Pre-release: 0.6.x](#pre-release-06x) below to opt in. Full release list
 lives on [Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases).
@@ -62,12 +62,12 @@ lives on [Releases](https://github.com/YEOMessaging/YEOFR-SPM/releases).
 ```swift
 dependencies: [
   // `.upToNextMinor` keeps you on the 0.5.x stable line. Plain
-  // `from: "0.5.4"` would still resolve to 0.6.2 — SwiftPM ignores
+  // `from: "0.5.5"` would still resolve to 0.6.6 — SwiftPM ignores
   // GitHub's pre-release flag and treats every 0.x bump as in-range
   // until 1.0.0.
   .package(
     url: "https://github.com/YEOMessaging/YEOFR-SPM",
-    .upToNextMinor(from: "0.5.4")
+    .upToNextMinor(from: "0.5.5")
   )
 ],
 targets: [
@@ -86,11 +86,11 @@ graph-register failure when Xcode resolves the package.
 
 ## Pre-release: 0.6.x
 
-The `0.6.x` line (`0.6.0`, `0.6.1`, `0.6.2`) is published as **pre-release**
+The `0.6.x` line (`0.6.0` through `0.6.6`) is published as **pre-release**
 while the new SDK surface stabilises. Default consumers should stay on
-`0.5.4`. Note that SwiftPM does **not** honor GitHub's pre-release flag, so
+`0.5.5`. Note that SwiftPM does **not** honor GitHub's pre-release flag, so
 you must use `exact:` or a bounded range to opt in or out deliberately —
-plain `from:` will pull `0.6.2`.
+plain `from:` will pull `0.6.6`.
 
 What's in the 0.6.x line (covered by the rest of this README):
 
@@ -112,11 +112,12 @@ dependencies: [
 ]
 ```
 
-> The hello-world, the cryptor section, and the API table below all
-> document the 0.6.x surface. If you're on `0.5.4`, treat those snippets
-> as forward-looking — the older API (static `activate`, three-arg
-> `FaceTrustSession`, no encryption selector) is what compiles against
-> 0.5.x.
+> The hello-world, the cryptor section, and the API table below
+> document the 0.6.x surface. On `0.5.5` the FR + liveness +
+> `FaceTrustSession` wiring is the same; the difference is
+> **construction** — use `YEOFRSDK(pilotUnlockCode:)` (see
+> [Pilot access](#pilot-access-for-non-yeo-bundle-ids)), not the
+> `useCase:` / `encryption:` initialisers, which are 0.6.x-only.
 
 ---
 
@@ -148,29 +149,38 @@ For evaluation customers, we issue a **temporary unlock code** that
 bypasses the bundle gate during a fixed pilot window. Email
 **christo@yeomessaging.com** to request one.
 
-As of **0.6.0** the unlock code is passed directly to the SDK's
-designated initialisers — there is no longer a separate static
-`activate(...)` call, and there is no `YEOFRSDK.shared` singleton.
-Every public initialiser requires the code:
+The unlock code is passed to the `YEOFRSDK` initialiser — there is no
+static `activate(...)` call and no `YEOFRSDK.shared` singleton.
+**Constructing the instance is what runs the bundle gate**, so the code
+must be supplied right there. On a non-YEO bundle ID, an absent or
+expired code aborts the process at that line; reaching the next line is
+itself proof the gate passed.
 
 ```swift
 import YEOFR
 
-let sdk = YEOFRSDK(
-    useCase: .authentication,
-    pilotUnlockCode: "<contact-us-for-pilot-code>"
-)
+// Current stable (0.5.5). On a non-YEO bundle ID the gate passes only
+// with a valid, unexpired code.
+let sdk = YEOFRSDK(pilotUnlockCode: "<contact-us-for-pilot-code>")
 
 let faceTrust = FaceTrustSession(sdk: sdk)
 ```
 
-If your app is YEO-owned, pass any non-empty string — the gate
-passes natively on a YEO bundle ID regardless of the value.
+If your app ships under a YEO-owned bundle ID the code is optional —
+the gate passes natively, so the value is ignored (any non-empty
+string, or none at all, works).
 
-The code has a **hard expiry baked into the SDK build**. Once expired,
-no code unlocks the gate regardless of value — request a fresh build
-from us. This is a stop-gap measure for the 0.x cycle; the
-forward-looking licensing scheme is tracked under CSI-384.
+> **0.6.x (pre-release) note:** the newer line folds the code into the
+> richer initialisers, e.g.
+> `YEOFRSDK(useCase: .authentication, pilotUnlockCode: "…")` with an
+> `encryption:` selector. The single-arg `YEOFRSDK(pilotUnlockCode:)`
+> above is the 0.5.x form.
+
+The code carries a **hard expiry baked into the SDK build** — it is
+valid only until a fixed UTC date, after which no code unlocks the gate
+regardless of value and you must request a fresh build. This is a
+stop-gap for the 0.x cycle; the forward-looking licensing scheme is
+tracked under CSI-384.
 
 ---
 
