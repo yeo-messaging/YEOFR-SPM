@@ -1,1 +1,11 @@
 .DS_Store
+
+# SwiftPM / Xcode build state
+.build/
+.swiftpm/
+
+# Local-link artifact: the relink flow copies the freshly built framework
+# here and Package.swift temporarily points at it via `path:`. The release
+# Package.swift references the zip by URL + checksum instead — the unzipped
+# framework must never be committed.
+YEOFR.xcframework/
