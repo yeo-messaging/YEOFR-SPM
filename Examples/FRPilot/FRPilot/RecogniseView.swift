@@ -14,6 +14,9 @@ struct RecogniseView: View {
                 .ignoresSafeArea()
 
             VStack {
+                controls
+                    .padding(.horizontal, 28)
+                    .padding(.top, 12)
                 Spacer()
                 badge
                     .padding(.bottom, 40)
@@ -21,6 +24,26 @@ struct RecogniseView: View {
         }
         .navigationTitle("Recognition")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    /// Live anti-spoof signal toggles. Custom `Binding`s call the view model's
+    /// setters (no `onChange`); flipping one re-applies the fused config.
+    private var controls: some View {
+        VStack(spacing: 8) {
+            Toggle("Liveness signal", isOn: Binding(
+                get: { viewModel.useLivenessSignal },
+                set: { viewModel.setLivenessSignal($0) }))
+            Toggle("TrueDepth signal", isOn: Binding(
+                get: { viewModel.useTrueDepthSignal },
+                set: { viewModel.setTrueDepthSignal($0) }))
+        }
+        .toggleStyle(.switch)
+        .tint(.green)
+        .font(.callout)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(.black.opacity(0.6), in: RoundedRectangle(cornerRadius: 12))
     }
 
     private var badge: some View {

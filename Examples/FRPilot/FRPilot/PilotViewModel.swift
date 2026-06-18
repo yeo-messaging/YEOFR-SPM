@@ -27,6 +27,13 @@ final class PilotViewModel {
     private(set) var enrolPoseProgress: Double = 0
     private(set) var enrolTargetMatched = false
 
+    /// Fused anti-spoof signal toggles, both default on. Flipping one re-applies
+    /// the config to the running service (which resets trust state so the next
+    /// frame re-evaluates cold). FR + the identity gate are unaffected — this only
+    /// governs which signals contribute to `trusted`.
+    private(set) var useLivenessSignal = true
+    private(set) var useTrueDepthSignal = true
+
     var previewSession: AVCaptureSession { service.previewSession }
     let sdkVersion = YEOFRSDK.version
 
@@ -73,10 +80,30 @@ final class PilotViewModel {
         enrolTargetMatched = false
     }
 
+    /// Toggle the liveness CNN signal. Re-applies the fused config live.
+    func setLivenessSignal(_ on: Bool) {
+        useLivenessSignal = on
+        applyFusionConfig()
+    }
+
+    /// Toggle the TrueDepth 3D signal. Re-applies the fused config live.
+    func setTrueDepthSignal(_ on: Bool) {
+        useTrueDepthSignal = on
+        applyFusionConfig()
+    }
+
+    private func applyFusionConfig() {
+        let config = LivenessFusionConfig(useLivenessSDK: useLivenessSignal,
+                                          useTrueDepthSDK: useTrueDepthSignal)
+        Task { await service.setFusionConfig(config) }
+    }
+
     private func apply(_ update: FaceTrustUpdate) {
         latestVerdict = Self.verdict(from: update)
-        livenessText = Self.describe(live: update.livenessGenuine)
-        depthText = Self.describe(threeD: update.depthIsThreeD)
+        // A disabled signal reads "Off" rather than a stale/continuing value
+        // (the SDK also reports nil for it, so this is belt-and-braces + clearer copy).
+        livenessText = useLivenessSignal ? Self.describe(live: update.livenessGenuine) : "Off"
+        depthText = useTrueDepthSignal ? Self.describe(threeD: update.depthIsThreeD) : "Off"
         canEnrol = !isEnrolling
             && update.faceCount == 1
             && (update.status == .trusted || update.status == .notTrusted)
