@@ -41,16 +41,49 @@ final class PilotViewModel {
     private static let pilotUnlockCode = "YOUR-PILOT-CODE"
 
     private let service: FaceTrustService
+    /// Non-nil when encryption is available; used by the encrypted-persistence
+    /// path and the encryption demo screen. nil only on the (near-impossible)
+    /// Keychain failure handled in `init`.
+    private let sdk: YEOFRSDK?
+    private let cryptor: ChaChaPolyCryptor?
+    private let cryptoStore: TrackerCryptoStore
     private var updatesLoop: Task<Void, Never>?
     private var enrolLoop: Task<Void, Never>?
 
     init() {
-        service = FaceTrustService(pilotUnlockCode: Self.pilotUnlockCode)
+        let store = TrackerCryptoStore()
+        cryptoStore = store
+        do {
+            // Build the SDK with the custom ChaChaPoly cryptor and let FaceTrustService
+            // use a plaintext *scratch* file we wrap with encryption at rest.
+            let cryptor = try ChaChaPolyCryptor.makeWithKeychainKey()
+            let sdk = try YEOFRSDK(pilotUnlockCode: Self.pilotUnlockCode,
+                                   encryption: .custom(cryptor))
+            self.cryptor = cryptor
+            self.sdk = sdk
+            self.service = FaceTrustService(sdk: sdk, trackerURL: store.scratchURL)
+        } catch {
+            // Keychain unavailable (essentially never on-device): fall back to the
+            // turnkey plaintext service so the pilot still runs; encrypted
+            // persistence and the encryption demo are then disabled.
+            print("[FRPilot] encryption unavailable, using plaintext service: \(error)")
+            self.cryptor = nil
+            self.sdk = nil
+            self.service = FaceTrustService(pilotUnlockCode: Self.pilotUnlockCode)
+        }
     }
 
     /// Start the service and fan its trust updates into observable state. Idempotent.
     func start() async {
         guard updatesLoop == nil else { return }
+        // Decrypt the persisted enrolment into the plaintext scratch the SDK reads
+        // during start(), so the identity gate arms from the encrypted blob. The
+        // scratch is dropped immediately after (no plaintext tracker at rest).
+        if let cryptor {
+            do { try cryptoStore.restoreScratchForStart(using: cryptor) }
+            catch { print("[FRPilot] could not restore encrypted tracker: \(error)") }
+        }
+        defer { cryptoStore.cleanupScratch() }
         do {
             try await service.start()
         } catch {
@@ -109,10 +142,15 @@ final class PilotViewModel {
             && (update.status == .trusted || update.status == .notTrusted)
     }
 
-    /// Enrol `name` from the live camera. The SDK drives the capture, persists the
-    /// gallery, and re-arms the identity gate; here we only mirror progress.
-    func beginEnrolment(name: String) {
+    /// How the most recent `beginEnrolment` should persist the tracker at rest.
+    private var pendingEncrypted = false
+
+    /// Enrol `name` from the live camera. The SDK drives the capture and re-arms
+    /// the identity gate; on completion we persist the tracker at rest either as
+    /// plaintext (`encrypted == false`) or ChaChaPoly-encrypted (`encrypted == true`).
+    func beginEnrolment(name: String, encrypted: Bool) {
         guard !isEnrolling, canEnrol else { return }
+        pendingEncrypted = encrypted
         isEnrolling = true
         enrolPrompt = "Hold steady…"
         enrolPoseProgress = 0
@@ -136,11 +174,64 @@ final class PilotViewModel {
             isEnrolling = false
             enrolPoseProgress = 1
             enrolledName = service.enrolledName
+            // The service has just written the plaintext scratch; re-serialize it
+            // (plaintext or encrypted) to tracker.blob so it survives relaunch.
+            persistEnrolment(encrypted: pendingEncrypted)
         case .failed:
             isEnrolling = false
             enrolPrompt = step.prompt
         @unknown default:
             break
+        }
+    }
+
+    /// Persist the freshly enrolled tracker at rest in the chosen mode.
+    private func persistEnrolment(encrypted: Bool) {
+        guard let sdk else { return }
+        do { try cryptoStore.persist(from: sdk, encrypted: encrypted) }
+        catch { print("[FRPilot] failed to persist tracker: \(error)") }
+    }
+
+    /// Forget the enrolment and delete the encrypted tracker at rest.
+    func clearEnrolment() {
+        service.clearEnrollment()
+        cryptoStore.wipe()
+        enrolledName = nil
+        latestVerdict = .noFace
+    }
+
+    /// Snapshot for the encryption demo screen: the *actual* bytes persisted at
+    /// rest (a serialized EncryptedBlob), the mode they were stored under, and a
+    /// recoverability check — does the stored blob parse + decrypt back to a valid
+    /// tracker envelope. nil when encryption is unavailable or nothing is persisted.
+    ///
+    /// We deliberately do NOT compare against `sdk.faceRecognitionTrackerData()`:
+    /// the Luxand video tracker mutates its serialized state every processed
+    /// frame, so the live bytes drift away from what was persisted at enrol and a
+    /// byte-equality check would spuriously fail.
+    func makeEncryptionDemo() -> EncryptionDemo? {
+        guard let cryptor, let persisted = cryptoStore.persistedBlobData() else { return nil }
+        do {
+            let blob = try EncryptedBlob.parse(persisted)
+            let recovered: Data
+            switch blob.algorithmID {
+            case EncryptedBlob.AlgorithmID.passthrough:
+                recovered = blob.payload
+            case cryptor.algorithmID:
+                recovered = try cryptor.decrypt(blob)
+            default:
+                recovered = Data()
+            }
+            // A valid tracker envelope begins with the "YLXE" magic.
+            let isValidTracker = recovered.starts(with: Data([0x59, 0x4C, 0x58, 0x45]))
+            return EncryptionDemo(
+                recoveredSize: recovered.count,
+                persistedBlob: persisted,
+                persistedAlgorithmID: blob.algorithmID,
+                roundTripVerified: isValidTracker)
+        } catch {
+            print("[FRPilot] encryption demo failed: \(error)")
+            return nil
         }
     }
 

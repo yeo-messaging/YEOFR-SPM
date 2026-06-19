@@ -8,6 +8,8 @@ import SwiftUI
 struct EnrolView: View {
     let viewModel: PilotViewModel
     let name: String
+    /// Persist the enrolled tracker ChaChaPoly-encrypted at rest when true.
+    var encrypted: Bool = false
     @Environment(\.dismiss) private var dismiss
 
     /// Set on tap so the completion `task` only dismisses after a started walk.
@@ -46,12 +48,14 @@ struct EnrolView: View {
 
             Button {
                 started = true
-                viewModel.beginEnrolment(name: name)
+                viewModel.beginEnrolment(name: name, encrypted: encrypted)
             } label: {
-                Label("Enrol \(name)", systemImage: "person.badge.plus")
+                Label(encrypted ? "Enrol \(name) (Encrypted)" : "Enrol \(name)",
+                      systemImage: encrypted ? "lock.shield" : "person.badge.plus")
                     .frame(maxWidth: .infinity)
             }
             .buttonStyle(.borderedProminent)
+            .tint(encrypted ? .indigo : .accentColor)
             .disabled(!viewModel.canEnrol)
         }
     }

@@ -32,12 +32,23 @@ struct ContentView: View {
                     .submitLabel(.done)
 
                 NavigationLink {
-                    EnrolView(viewModel: viewModel, name: trimmedName)
+                    EnrolView(viewModel: viewModel, name: trimmedName, encrypted: false)
                 } label: {
                     Label("Enrol Face", systemImage: "person.badge.plus")
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.borderedProminent)
+                .disabled(trimmedName.isEmpty)
+
+                NavigationLink {
+                    EnrolView(viewModel: viewModel, name: trimmedName, encrypted: true)
+                } label: {
+                    Label("Enrol Face with Encryption", systemImage: "lock.shield")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.indigo)
+                // Persists the tracker ChaChaPoly-encrypted at rest.
                 .disabled(trimmedName.isEmpty)
 
                 NavigationLink {
@@ -48,6 +59,16 @@ struct ContentView: View {
                 }
                 .buttonStyle(.bordered)
                 // Recognition needs a gallery — enrol first.
+                .disabled(viewModel.enrolledName == nil)
+
+                NavigationLink {
+                    EncryptionDemoView(viewModel: viewModel)
+                } label: {
+                    Label("Tracker Encryption", systemImage: "lock.doc")
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                // The demo serializes the enrolled tracker — enrol first.
                 .disabled(viewModel.enrolledName == nil)
 
                 Spacer()
