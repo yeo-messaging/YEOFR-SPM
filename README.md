@@ -67,9 +67,8 @@ resolution fails. Add the camera-usage key:
 YEOFR is gated to YEO-owned bundle IDs — constructing the SDK on a non-YEO
 bundle id aborts unless you pass a valid **pilot unlock code** (issued for a
 fixed evaluation window). Email **christo@yeomessaging.com** to request one.
-On a `com.youreyeonly.*` bundle id the gate passes natively and the code is
-ignored. The code has a hard expiry baked into the build; once expired, request
-a fresh one.
+On a YEO-owned bundle id the gate passes natively and the code is ignored. The
+code has a hard expiry baked into the build; once expired, request a fresh one.
 
 ---
 
