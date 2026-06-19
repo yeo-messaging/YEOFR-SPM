@@ -44,7 +44,7 @@ Or in `Package.swift`:
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.5.6")
+  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.5.9")
 ],
 targets: [
   .target(name: "YourApp",
@@ -119,20 +119,34 @@ Read it as the canonical integration reference.
 
 ## Advanced: encrypted tracker storage
 
-`FaceTrustService` persists the tracker as plaintext in the app container. For
-encrypted at-rest storage, build a `YEOFRSDK` with an encryption mode and hand
-it to the bring-your-own-engine initializer:
+`FaceTrustService` persists the tracker as **plaintext** in the app container
+(it uses the SDK's raw tracker APIs), so configuring an encryption mode and
+handing the SDK to `FaceTrustService(sdk:)` does **not**, on its own, encrypt the
+saved file.
+
+The SDK offers two encryption modes — `.plaintext` and `.custom` (bring your own
+`Cryptor`, e.g. a CryptoKit AEAD). The cryptor is applied by the SDK's
+`encrypted*` tracker APIs, so for encrypted-at-rest storage you own persistence:
 
 ```swift
-let sdk = try YEOFRSDK(
-    pilotUnlockCode: "YOUR-PILOT-CODE",
-    encryption: .aesGCM(keychainTag: "com.example.app.frsdk")     // or .aesCBCHMAC / .custom
-)
-let service = FaceTrustService(sdk: sdk)
+// A custom Cryptor — see Examples/FRPilot/ChaChaPolyCryptor.swift (ChaChaPoly).
+let sdk = try YEOFRSDK(pilotUnlockCode: "YOUR-PILOT-CODE",
+                       encryption: .custom(MyCryptor()))
+
+// Save — serialize the tracker through the configured cryptor:
+if let blob = try sdk.encryptedFaceRecognitionTrackerData() {
+    try blob.serialized().write(to: url, options: .atomic)
+}
+
+// Load — parse + decrypt through the cryptor:
+try sdk.loadTracker(from: EncryptedBlob.parse(Data(contentsOf: url)))
 ```
 
-See `YEOEncryption`, `EncryptedBlob`, and `KeychainKeyStore` in the API
-reference.
+A complete worked example — plaintext vs ChaChaPoly-encrypted enrolment wrapped
+around `FaceTrustService` — lives in `Examples/FRPilot`.
+
+See `YEOEncryption`, `Cryptor`, `EncryptedBlob`, and `KeychainKeyStore` in the
+API reference.
 
 ---
 
