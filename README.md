@@ -12,7 +12,7 @@ Add one SPM product — `YEOFR` — and get:
   fused pipeline, manages the identity gate, and persists enrolment, exposing
   the whole thing as two `AsyncStream`s.
 
-> **0.7.0 is the current release** (continuing the Luxand line). The older
+> **0.7.1 is the current release** (continuing the Luxand line). The older
 > `0.6.x` pre-release line is retired — do not pin to it.
 
 ---
@@ -44,7 +44,7 @@ Or in `Package.swift`:
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.7.0")
+  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.7.1")
 ],
 targets: [
   .target(name: "YourApp",
