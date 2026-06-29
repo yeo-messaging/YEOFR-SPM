@@ -11,9 +11,11 @@ Add one SPM product — `YEOFR` — and get:
 - **`FaceTrustService`** — a turnkey object that owns the camera, runs the
   fused pipeline, manages the identity gate, and persists enrolment, exposing
   the whole thing as two `AsyncStream`s.
+- **Image reference enrolment** — enrol a reference face from a still image
+  (no camera) and run offline 1:1 matching against it.
 
-> **0.7.1 is the current release** (continuing the Luxand line). The older
-> `0.6.x` pre-release line is retired — do not pin to it.
+> **0.7.2 is the current release.** The older `0.6.x` pre-release line is
+> retired — do not pin to it.
 
 ---
 
@@ -44,7 +46,7 @@ Or in `Package.swift`:
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.7.1")
+  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.7.2")
 ],
 targets: [
   .target(name: "YourApp",
