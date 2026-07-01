@@ -14,7 +14,7 @@ Add one SPM product — `YEOFR` — and get:
 - **Image reference enrolment** — enrol a reference face from a still image
   (no camera) and run offline 1:1 matching against it.
 
-> **0.7.2 is the current release.** The older `0.6.x` pre-release line is
+> **0.7.3 is the current release.** The older `0.6.x` pre-release line is
 > retired — do not pin to it.
 
 ---
@@ -46,7 +46,7 @@ Or in `Package.swift`:
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.7.2")
+  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.7.3")
 ],
 targets: [
   .target(name: "YourApp",
