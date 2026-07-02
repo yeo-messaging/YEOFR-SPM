@@ -14,7 +14,7 @@ Add one SPM product — `YEOFR` — and get:
 - **Image reference enrolment** — enrol a reference face from a still image
   (no camera) and run offline 1:1 matching against it.
 
-> **0.7.3 is the current release.** The older `0.6.x` pre-release line is
+> **0.7.4 is the current release.** The older `0.6.x` pre-release line is
 > retired — do not pin to it.
 
 ---
@@ -39,14 +39,14 @@ in object file … built for 'iOS'` — build and run on a device.
 dialog can't resolve SSH):
 
 ```
-https://github.com/YEOMessaging/YEOFR-SPM
+https://github.com/yeo-messaging/YEOFR-SPM
 ```
 
 Or in `Package.swift`:
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/YEOMessaging/YEOFR-SPM", from: "0.7.3")
+  .package(url: "https://github.com/yeo-messaging/YEOFR-SPM", from: "0.7.4")
 ],
 targets: [
   .target(name: "YourApp",
