@@ -23,6 +23,14 @@ struct ContentView: View {
                 Text("YEOFR Pilot")
                     .font(.title2.bold())
 
+                if let licenseError = viewModel.licenseErrorText {
+                    ContentUnavailableView {
+                        Label("Unlicensed", systemImage: "key.slash")
+                    } description: {
+                        Text(licenseError)
+                    }
+                    Spacer()
+                } else {
                 enrolmentStatus
 
                 TextField("Name (e.g. Alice)", text: $name)
@@ -72,6 +80,7 @@ struct ContentView: View {
                 .disabled(viewModel.enrolledName == nil)
 
                 Spacer()
+                }
 
                 Text("YEOFR SDK \(viewModel.sdkVersion)")
                     .font(.caption2)

@@ -14,7 +14,7 @@ Add one SPM product — `YEOFR` — and get:
 - **Image reference enrolment** — enrol a reference face from a still image
   (no camera) and run offline 1:1 matching against it.
 
-> **0.7.4 is the current release.** The older `0.6.x` pre-release line is
+> **0.7.6 is the current release.** The older `0.6.x` pre-release line is
 > retired — do not pin to it.
 
 ---
@@ -25,11 +25,13 @@ Add one SPM product — `YEOFR` — and get:
 |---|---|
 | iOS | 17.0+ |
 | Swift | 5.9+ |
-| Devices | **Real iPhone only** — the xcframework has no simulator slice |
+| Devices | Builds for device and simulator; **recognition needs a real iPhone** |
 | Camera | Front camera required; **TrueDepth recommended** for depth anti-spoof |
 
-Linking on the simulator fails with `building for 'iOS-simulator', but linking
-in object file … built for 'iOS'` — build and run on a device.
+As of 0.7.6 the xcframework ships a simulator slice, so your app and its unit
+tests compile and run in the simulator. The recognition engine is inert there —
+every frame reports no face. Anything that must actually recognise a face has to
+run on a device.
 
 ---
 
@@ -46,7 +48,7 @@ Or in `Package.swift`:
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/yeo-messaging/YEOFR-SPM", from: "0.7.4")
+  .package(url: "https://github.com/yeo-messaging/YEOFR-SPM", from: "0.7.6")
 ],
 targets: [
   .target(name: "YourApp",
@@ -64,13 +66,33 @@ resolution fails. Add the camera-usage key:
 
 ---
 
-## Pilot access for non-YEO bundle IDs
+## Licensing for non-YEO bundle IDs
 
-YEOFR is gated to YEO-owned bundle IDs — constructing the SDK on a non-YEO
-bundle id aborts unless you pass a valid **pilot unlock code** (issued for a
-fixed evaluation window). Email **christo@yeomessaging.com** to request one.
-On a YEO-owned bundle id the gate passes natively and the code is ignored. The
-code has a hard expiry baked into the build; once expired, request a fresh one.
+YEOFR is gated to YEO-owned bundle IDs. On a non-YEO bundle id you need one of
+two credentials — email **christo@yeomessaging.com** for either. On a YEO-owned
+bundle id the gate passes natively and both are ignored.
+
+**Signed license file (preferred, 0.7.6+).** You get a `.yeolicense` file
+issued for your bundle id and validity window. Bundle it with the app and pass
+its bytes to the initializer:
+
+```swift
+let license = try Data(contentsOf: Bundle.main.url(forResource: "MyApp",
+                                                   withExtension: "yeolicense")!)
+let sdk = try YEOFRSDK(license: license)
+let service = FaceTrustService(sdk: sdk)
+```
+
+A bad license throws `YEOLicenseError` — `.malformed`, `.invalidSignature`,
+`.notYetValid`, `.expired`, `.bundleIDMismatch`, `.unsupportedVersion` — so you
+can show your own "unlicensed" screen instead of crashing. `sdk.licenseClaims`
+reports the granted bundle ids, validity window, and features. See
+`Examples/FRPilot` for a complete implementation of both paths.
+
+**Pilot unlock code (legacy).** A time-limited code string passed as
+`FaceTrustService(pilotUnlockCode:)` / `YEOFRSDK(pilotUnlockCode:)`. Unlike a
+license file, an invalid or expired code **aborts the process** — it is a hard
+gate you cannot catch. Prefer a license file for anything shipping to users.
 
 ---
 
