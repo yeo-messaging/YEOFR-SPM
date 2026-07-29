@@ -9,3 +9,9 @@
 # Package.swift references the zip by URL + checksum instead — the unzipped
 # framework must never be committed.
 YEOFR.xcframework/
+
+# Issued per-customer license files — never commit
+*.yeolicense
+
+# Xcode per-user state
+xcuserdata/

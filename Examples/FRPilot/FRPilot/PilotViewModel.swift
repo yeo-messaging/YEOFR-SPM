@@ -34,13 +34,56 @@ final class PilotViewModel {
     private(set) var useLivenessSignal = true
     private(set) var useTrueDepthSignal = true
 
-    var previewSession: AVCaptureSession { service.previewSession }
+    /// Placeholder so the unlicensed state doesn't hand out a fresh session per read.
+    private let idleSession = AVCaptureSession()
+    var previewSession: AVCaptureSession { service?.previewSession ?? idleSession }
     let sdkVersion = YEOFRSDK.version
 
-    /// Pilot code for a non-YEO bundle id — request your own from YEO.
+    /// Non-nil when the SDK could not be constructed from a license; the UI
+    /// shows this instead of the camera features.
+    private(set) var licenseErrorText: String?
+
+    // MARK: - Licensing
+    //
+    // The SDK accepts either credential; this app demonstrates both:
+    //
+    //   1. Signed license file (preferred) — a `FRPilot.yeolicense` bundled
+    //      with the app. Bad/missing licenses surface as a catchable
+    //      `YEOLicenseError`, shown on the Unlicensed screen.
+    //   2. Pilot unlock code (legacy) — a time-limited code string. Used only
+    //      if no license file is bundled AND the placeholder below was
+    //      replaced. NOTE: an invalid or expired pilot code terminates the
+    //      process inside the SDK (hard gate) — it cannot be caught here.
+    //
+    // Request either from christo@yeomessaging.com.
+
+    /// Pilot code for a non-YEO bundle id — placeholder; replace with a real
+    /// code only if you're not using a license file.
     private static let pilotUnlockCode = "YOUR-PILOT-CODE"
 
-    private let service: FaceTrustService
+    /// Signed license file bundled with the app — request your own from YEO.
+    /// A bundled license is absent, readable, or present-but-unreadable — three
+    /// different situations that need three different remedies, so they are not
+    /// collapsed into an optional.
+    private enum BundledLicense {
+        case absent
+        case present(Data)
+        case unreadable(Error)
+    }
+
+    private static func loadLicense() -> BundledLicense {
+        guard let url = Bundle.main.url(forResource: "FRPilot", withExtension: "yeolicense") else {
+            return .absent
+        }
+        do {
+            return .present(try Data(contentsOf: url))
+        } catch {
+            return .unreadable(error)
+        }
+    }
+
+    /// nil only when the license is missing/rejected (`licenseErrorText` set).
+    private let service: FaceTrustService?
     /// Non-nil when encryption is available; used by the encrypted-persistence
     /// path and the encryption demo screen. nil only on the (near-impossible)
     /// Keychain failure handled in `init`.
@@ -53,15 +96,66 @@ final class PilotViewModel {
     init() {
         let store = TrackerCryptoStore()
         cryptoStore = store
+        let bundled = Self.loadLicense()
+        if case .unreadable(let error) = bundled {
+            // The file is in the bundle but cannot be read — telling the user to
+            // add it would send them after a file that is already there.
+            licenseErrorText = """
+            FRPilot.yeolicense is bundled but could not be read: \(error.localizedDescription)
+            Re-copy the file into the app bundle and rebuild.
+            """
+            cryptor = nil
+            sdk = nil
+            service = nil
+            return
+        }
+        guard case .present(let license) = bundled else {
+            // No license file bundled — fall back to the pilot code, if the
+            // integrator supplied a real one.
+            if Self.pilotUnlockCode != "YOUR-PILOT-CODE" {
+                do {
+                    let cryptor = try ChaChaPolyCryptor.makeWithKeychainKey()
+                    let sdk = try YEOFRSDK(pilotUnlockCode: Self.pilotUnlockCode,
+                                           encryption: .custom(cryptor))
+                    self.cryptor = cryptor
+                    self.sdk = sdk
+                    self.service = FaceTrustService(sdk: sdk, trackerURL: store.scratchURL)
+                } catch {
+                    // Keychain unavailable: plaintext fallback, same as below.
+                    print("[FRPilot] encryption unavailable, using plaintext service: \(error)")
+                    self.cryptor = nil
+                    self.sdk = nil
+                    self.service = FaceTrustService(pilotUnlockCode: Self.pilotUnlockCode)
+                }
+                return
+            }
+            licenseErrorText = """
+            This copy of FRPilot has no license.
+            Contact christo@yeomessaging.com for licensing and \
+            request your yeolicense file (or a pilot code), then \
+            add it to the app bundle and rebuild.
+            """
+            cryptor = nil
+            sdk = nil
+            service = nil
+            return
+        }
         do {
             // Build the SDK with the custom ChaChaPoly cryptor and let FaceTrustService
             // use a plaintext *scratch* file we wrap with encryption at rest.
             let cryptor = try ChaChaPolyCryptor.makeWithKeychainKey()
-            let sdk = try YEOFRSDK(pilotUnlockCode: Self.pilotUnlockCode,
-                                   encryption: .custom(cryptor))
+            let sdk = try YEOFRSDK(license: license, encryption: .custom(cryptor))
             self.cryptor = cryptor
             self.sdk = sdk
             self.service = FaceTrustService(sdk: sdk, trackerURL: store.scratchURL)
+        } catch let error as YEOLicenseError {
+            licenseErrorText = """
+            License rejected: \(error).
+            Contact christo@yeomessaging.com for licensing.
+            """
+            cryptor = nil
+            sdk = nil
+            service = nil
         } catch {
             // Keychain unavailable (essentially never on-device): fall back to the
             // turnkey plaintext service so the pilot still runs; encrypted
@@ -69,13 +163,18 @@ final class PilotViewModel {
             print("[FRPilot] encryption unavailable, using plaintext service: \(error)")
             self.cryptor = nil
             self.sdk = nil
-            self.service = FaceTrustService(pilotUnlockCode: Self.pilotUnlockCode)
+            if let sdk = try? YEOFRSDK(license: license) {
+                self.service = FaceTrustService(sdk: sdk)
+            } else {
+                licenseErrorText = "License rejected on plaintext fallback"
+                self.service = nil
+            }
         }
     }
 
     /// Start the service and fan its trust updates into observable state. Idempotent.
     func start() async {
-        guard updatesLoop == nil else { return }
+        guard let service, updatesLoop == nil else { return }
         // Decrypt the persisted enrolment into the plaintext scratch the SDK reads
         // during start(), so the identity gate arms from the encrypted blob. The
         // scratch is dropped immediately after (no plaintext tracker at rest).
@@ -93,7 +192,7 @@ final class PilotViewModel {
         enrolledName = service.enrolledName
 
         updatesLoop = Task { [weak self] in
-            guard let updates = self?.service.updates() else { return }
+            guard let updates = self?.service?.updates() else { return }
             for await update in updates {
                 self?.apply(update)
             }
@@ -103,7 +202,7 @@ final class PilotViewModel {
     func stop() {
         updatesLoop?.cancel(); updatesLoop = nil
         enrolLoop?.cancel(); enrolLoop = nil
-        service.stop()
+        service?.stop()
         latestVerdict = .noFace
         livenessText = "—"
         depthText = "—"
@@ -128,7 +227,7 @@ final class PilotViewModel {
     private func applyFusionConfig() {
         let config = LivenessFusionConfig(useLivenessSDK: useLivenessSignal,
                                           useTrueDepthSDK: useTrueDepthSignal)
-        Task { await service.setFusionConfig(config) }
+        Task { await service?.setFusionConfig(config) }
     }
 
     private func apply(_ update: FaceTrustUpdate) {
@@ -157,7 +256,7 @@ final class PilotViewModel {
         enrolTargetMatched = false
 
         enrolLoop = Task { [weak self] in
-            guard let steps = self?.service.enroll(name: name) else { return }
+            guard let steps = self?.service?.enroll(name: name) else { return }
             for await step in steps {
                 self?.applyEnrol(step)
             }
@@ -173,7 +272,7 @@ final class PilotViewModel {
         case .completed:
             isEnrolling = false
             enrolPoseProgress = 1
-            enrolledName = service.enrolledName
+            enrolledName = service?.enrolledName
             // The service has just written the plaintext scratch; re-serialize it
             // (plaintext or encrypted) to tracker.blob so it survives relaunch.
             persistEnrolment(encrypted: pendingEncrypted)
@@ -194,7 +293,7 @@ final class PilotViewModel {
 
     /// Forget the enrolment and delete the encrypted tracker at rest.
     func clearEnrolment() {
-        service.clearEnrollment()
+        service?.clearEnrollment()
         cryptoStore.wipe()
         enrolledName = nil
         latestVerdict = .noFace
@@ -206,7 +305,7 @@ final class PilotViewModel {
     /// tracker envelope. nil when encryption is unavailable or nothing is persisted.
     ///
     /// We deliberately do NOT compare against `sdk.faceRecognitionTrackerData()`:
-    /// the Luxand video tracker mutates its serialized state every processed
+    /// the recognition engine's video tracker mutates its serialized state every processed
     /// frame, so the live bytes drift away from what was persisted at enrol and a
     /// byte-equality check would spuriously fail.
     func makeEncryptionDemo() -> EncryptionDemo? {
