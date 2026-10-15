@@ -71,16 +71,10 @@ struct EnrolView: View {
 
     private var enrolmentProgress: some View {
         VStack(spacing: 12) {
-            HStack(spacing: 8) {
-                Text(viewModel.enrolPrompt)
-                    .font(.headline)
-                if viewModel.enrolTargetMatched {
-                    Image(systemName: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                }
-            }
+            Text(viewModel.enrolPrompt)
+                .font(.headline)
 
-            ProgressView(value: viewModel.enrolPoseProgress)
+            ProgressView()
                 .tint(.green)
         }
         .padding(16)

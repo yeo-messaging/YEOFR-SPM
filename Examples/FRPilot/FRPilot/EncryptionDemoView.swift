@@ -96,8 +96,10 @@ struct EncryptionDemoView: View {
     private var dangerZone: some View {
         Section {
             Button(role: .destructive) {
-                viewModel.clearEnrolment()
-                dismiss()
+                Task {
+                    await viewModel.clearEnrolment()
+                    dismiss()
+                }
             } label: {
                 Label("Forget enrolment & delete tracker.blob", systemImage: "trash")
             }

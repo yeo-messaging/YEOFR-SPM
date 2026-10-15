@@ -24,8 +24,6 @@ final class PilotViewModel {
 
     private(set) var isEnrolling = false
     private(set) var enrolPrompt = "Hold steady…"
-    private(set) var enrolPoseProgress: Double = 0
-    private(set) var enrolTargetMatched = false
 
     /// Fused anti-spoof signal toggles, both default on. Flipping one re-applies
     /// the config to the running service (which resets trust state so the next
@@ -208,8 +206,6 @@ final class PilotViewModel {
         depthText = "—"
         canEnrol = false
         isEnrolling = false
-        enrolPoseProgress = 0
-        enrolTargetMatched = false
     }
 
     /// Toggle the liveness CNN signal. Re-applies the fused config live.
@@ -252,8 +248,6 @@ final class PilotViewModel {
         pendingEncrypted = encrypted
         isEnrolling = true
         enrolPrompt = "Hold steady…"
-        enrolPoseProgress = 0
-        enrolTargetMatched = false
 
         enrolLoop = Task { [weak self] in
             guard let steps = self?.service?.enroll(name: name) else { return }
@@ -267,11 +261,8 @@ final class PilotViewModel {
         switch step.phase {
         case .capturing:
             enrolPrompt = step.prompt
-            enrolTargetMatched = step.isTargetMatched
-            enrolPoseProgress = step.poseProgress
         case .completed:
             isEnrolling = false
-            enrolPoseProgress = 1
             enrolledName = service?.enrolledName
             // The service has just written the plaintext scratch; re-serialize it
             // (plaintext or encrypted) to tracker.blob so it survives relaunch.
@@ -292,8 +283,8 @@ final class PilotViewModel {
     }
 
     /// Forget the enrolment and delete the encrypted tracker at rest.
-    func clearEnrolment() {
-        service?.clearEnrollment()
+    func clearEnrolment() async {
+        await service?.clearEnrollment()
         cryptoStore.wipe()
         enrolledName = nil
         latestVerdict = .noFace

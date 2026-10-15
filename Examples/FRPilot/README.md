@@ -24,7 +24,7 @@ for await update in service.updates() {                // live trust verdict, pe
 }
 
 for await step in service.enroll(name: "Alice") {      // guided capture; persists + re-arms the gate
-    // step.prompt ("Face the camera" / "Hold steady"), step.poseProgress, step.phase
+    // step.prompt ("Face the camera" / "Hold steady"), step.phase
 }
 ```
 

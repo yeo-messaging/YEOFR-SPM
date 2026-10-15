@@ -14,8 +14,9 @@ Add one SPM product — `YEOFR` — and get:
 - **Image reference enrolment** — enrol a reference face from a still image
   (no camera) and run offline 1:1 matching against it.
 
-> **0.7.6 is the current release.** The older `0.6.x` pre-release line is
-> retired — do not pin to it.
+> **0.11.0 is the current release.** Upgrading from an earlier release? See
+> [Upgrading to 0.11.0](#upgrading-to-0110). The older `0.6.x` pre-release
+> line is retired — do not pin to it.
 
 ---
 
@@ -28,8 +29,8 @@ Add one SPM product — `YEOFR` — and get:
 | Devices | Builds for device and simulator; **recognition needs a real iPhone** |
 | Camera | Front camera required; **TrueDepth recommended** for depth anti-spoof |
 
-As of 0.7.6 the xcframework ships a simulator slice, so your app and its unit
-tests compile and run in the simulator. The recognition engine is inert there —
+The xcframework ships an Apple-silicon simulator slice (`arm64`), so your app
+and its unit tests compile and run in the simulator. The recognition engine is inert there —
 every frame reports no face. Anything that must actually recognise a face has to
 run on a device.
 
@@ -48,7 +49,7 @@ Or in `Package.swift`:
 
 ```swift
 dependencies: [
-  .package(url: "https://github.com/yeo-messaging/YEOFR-SPM", from: "0.7.6")
+  .package(url: "https://github.com/yeo-messaging/YEOFR-SPM", from: "0.11.0")
 ],
 targets: [
   .target(name: "YourApp",
@@ -110,7 +111,7 @@ try await service.start()
 
 // Enrol once — a short guided capture, persisted + gated automatically:
 for await step in service.enroll(name: "Alice") {
-    // step.phase: .capturing (show step.prompt / step.poseProgress) → .completed
+    // step.phase: .capturing (show step.prompt) → .completed / .failed
 }
 
 // Live recognition:
@@ -125,9 +126,38 @@ TrueDepth, with framing applied — you never pick a similarity threshold, never
 touch the identity gate, and never manage the tracker file. The enrolment is
 restored across launches; `service.enrolledName` reflects who is enrolled.
 
-A single front pose separates the enrolled user from other people. For better
-recall as the user turns their head, pass
-`poses: PoseTarget.lightingAwareGallerySequence` to `enroll`.
+A single capture separates the enrolled user from other people. For better
+recall as the user turns their head, call `enroll(name:)` again under other
+angles and lighting, enrol from photos you already hold with
+`enroll(name:images:)`, or drive the guided five-pose walk with
+`PoseWalkEnrollment` from your own camera loop.
+
+---
+
+## Upgrading to 0.11.0
+
+From 0.9.1 (the previous public release):
+
+- **One built-in liveness model.** The fused pipeline always runs it; there is
+  no model to choose. `YEOPADModel` has a single case, and
+  `LivenessFusionConfig` no longer takes `padModel:` or `padFusion:`.
+- **Removed API:** `YEOPADFusion`, `YEOLivenessCalibration` and the
+  `FaceTrustSession` calibration methods, the `ObservedSignalRates`
+  `padFusion` / `padWindowSpan` members, and `YEOPADModel.isSingleFrame` /
+  `combinesTwoModels`. Code that set a model, a fusion rule or a per-user
+  calibration can simply drop it.
+- **Now `async`:** `YEOFRSDK.detectFaces(params:needFaceRect:)`,
+  `imageMatchScore(_:)`, `imageMatchesTracker(_:)`, `enrollReference(from:name:)`
+  and `FaceTrustSession.stillPADResult(image:faceRect:)`. Call them with
+  `await`.
+- **Re-enrol after upgrading.** The recognition model changed, and a gallery
+  saved by an earlier release is refused rather than loaded: `loadTracker`
+  returns an error code and leaves the current state untouched. Ask users to
+  enrol again.
+- **Liveness score.** `SDKFaceRecognitionResult.confidence` comes from the new
+  model. If you compare it against your own threshold (for example
+  `isConfident()`), re-check that threshold. `FaceTrustService` users need no
+  change: `update.status` already applies the full liveness rule.
 
 ---
 
