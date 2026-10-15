@@ -157,7 +157,8 @@ From 0.9.1 (the previous public release):
 - **Liveness verdict from `detectFaces`.** `SDKFaceRecognitionResult.confidence`
   is now the liveness *verdict* for the face in view, built up over recent
   frames, not one frame's score. It is `0` until there is a verdict (under a
-  second of a steady face) and whenever framing is invalid. `isConfident()`
+  second of a steady face) and with no face or several faces in view; a face
+  too near or too far is still judged, and `framing` says so. `isConfident()`
   now defaults to `0.5`, the same bar as the Android SDK. Read liveness from
   the new `result.isLive` (one detected face whose verdict clears the bar),
   and drop any hard-coded threshold such as `0.71`. `FaceTrustService` users need no change:
