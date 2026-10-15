@@ -154,10 +154,14 @@ From 0.9.1 (the previous public release):
   saved by an earlier release is refused rather than loaded: `loadTracker`
   returns an error code and leaves the current state untouched. Ask users to
   enrol again.
-- **Liveness score.** `SDKFaceRecognitionResult.confidence` comes from the new
-  model. If you compare it against your own threshold (for example
-  `isConfident()`), re-check that threshold. `FaceTrustService` users need no
-  change: `update.status` already applies the full liveness rule.
+- **Liveness verdict from `detectFaces`.** `SDKFaceRecognitionResult.confidence`
+  is now the liveness *verdict* for the face in view, built up over recent
+  frames, not one frame's score. It is `0` until there is a verdict (under a
+  second of a steady face) and whenever framing is invalid. `isConfident()`
+  now defaults to `0.5`, the same bar as the Android SDK. Treat a face as
+  live when `faceState == .detected && result.isConfident()`, and drop any
+  hard-coded threshold such as `0.71`. `FaceTrustService` users need no change:
+  `update.status` already applies the full liveness rule.
 
 ---
 
